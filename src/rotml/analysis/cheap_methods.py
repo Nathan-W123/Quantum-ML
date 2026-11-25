@@ -22,6 +22,7 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
+from rotml.data.qm9 import graph_from_xyz
 from rotml.physics.rotor import masses_for, rotational_constants
 
 XTB_FMAX = 0.01  # eV / Angstrom
@@ -32,17 +33,6 @@ XTB_MAX_STEPS = 400
 class Geometry:
     coords: np.ndarray
     energy: float
-
-
-def graph_with_stereo(qm9_mol: Chem.Mol) -> Chem.Mol | None:
-    """Sanitized mol (explicit H, QM9 conformer) with stereo assigned from 3D."""
-    mol = Chem.Mol(qm9_mol)
-    try:
-        Chem.SanitizeMol(mol)
-    except Exception:  # noqa: BLE001
-        return None
-    Chem.AssignStereochemistryFrom3D(mol)
-    return mol
 
 
 def mmff_relax(mol: Chem.Mol, conf_id: int = -1) -> Geometry | None:
@@ -109,21 +99,20 @@ def _abc(coords: np.ndarray, masses: np.ndarray) -> np.ndarray:
     return rotational_constants(coords, masses)
 
 
-def evaluate_molecule(qm9_mol: Chem.Mol, ref_abc: np.ndarray, k_conformers: int = 10,
-                      seed: int = 42) -> dict:
-    """Rotational constants of one molecule under every cheap method.
+def evaluate_molecule(symbols: list[str], dft_coords: np.ndarray, ref_abc: np.ndarray,
+                      k_conformers: int = 10, seed: int = 42) -> dict:
+    """Rotational constants of one QM9 molecule under every cheap method.
 
-    Returns a flat dict: {method}_{A|B|C} plus per-method wall time (s) and
-    the number of conformers embedded.
+    The molecular graph is re-perceived from the DFT geometry (QM9 molecules
+    are neutral, so charge 0). Returns a flat dict: {method}_{A|B|C} plus
+    per-method wall time (s) and the number of distinct conformers.
     """
     out: dict = {}
-    mol = graph_with_stereo(qm9_mol)
+    mol = graph_from_xyz(symbols, dft_coords, charge=0)
     if mol is None:
-        return {"status": "unsanitizable"}
-    symbols = [a.GetSymbol() for a in mol.GetAtoms()]
+        return {"status": "no_graph"}
     masses = masses_for(symbols)
-    charge = Chem.GetFormalCharge(mol)
-    dft_coords = mol.GetConformer().GetPositions()
+    charge = 0
 
     def record(name: str, abc: np.ndarray | None) -> None:
         for c, v in zip("ABC", abc if abc is not None else [np.nan] * 3):

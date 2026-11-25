@@ -8,7 +8,9 @@ Download first (about 45 MB):
     (cd data/raw/qm9_molnet && unzip qm9.zip)
 
 Also checks that rotational constants recomputed from the SDF geometries
-agree with the reference values in the CSV.
+agree with the reference values in the CSV. Bonds are re-perceived from the
+geometries because the SDF's bond orders and charges are unreliable (see
+rotml.data.qm9).
 """
 
 from __future__ import annotations
@@ -37,7 +39,8 @@ def main() -> None:
         geom = table.loc[nonlinear, f"{c}_geom"].to_numpy()
         rel[c] = np.abs(geom - ref) / ref
     print(f"molecules: {len(table)}  (linear: {(~nonlinear).sum()}, "
-          f"unsanitizable: {(~table.sanitized).sum()})  in {time.time() - t0:.0f}s")
+          f"no valid neutral graph from xyz: {(~table.graph_ok).sum()}, "
+          f"charged graph in SDF: {(table.sdf_net_charge != 0).sum()})  in {time.time() - t0:.0f}s")
     for c, r in rel.items():
         print(f"  {c}: geometry vs reference  median rel. diff {np.median(r):.2e}, "
               f"99.9th pct {np.quantile(r, 0.999):.2e}")

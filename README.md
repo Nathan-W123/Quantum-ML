@@ -30,9 +30,9 @@ the number of other molecules that also match in brackets:
 | Known observables | 0.1% | 0.5% | 1% | 2% | 5% |
 |---|---|---|---|---|---|
 | A, B, C | 98.6% (0) | 57.1% (2) | 12.0% (11) | 1.4% (66) | 0.1% (829) |
-| A, B, C + formula | 99.5% (0) | 94.5% (0) | 79.8% (1) | 46.3% (4) | 11.8% (36) |
+| A, B, C + formula | 99.5% (0) | 93.3% (0) | 75.4% (1) | 37.6% (5) | 7.2% (47) |
 | A, B, C + dipole magnitude (±0.2 D) | 99.6% (0) | 93.7% (0) | 69.6% (1) | 23.1% (7) | 2.3% (80) |
-| A, B, C + formula + dipole | 99.6% (0) | 98.8% (0) | 95.4% (0) | 82.8% (1) | 45.2% (6) |
+| A, B, C + formula + dipole | 99.6% (0) | 98.7% (0) | 94.8% (0) | 79.7% (1) | 37.5% (7) |
 
 ![Uniquely identified vs tolerance](results/m1/unique_vs_tolerance.png)
 
@@ -42,10 +42,11 @@ Findings:
   methods with vibrational corrections), rotational constants alone identify
   98.6% of QM9 molecules. At 1% (typical DFT) they identify only 12%.
 - **Knowing the formula buys roughly a factor of 2-4 in tolerance**: with the
-  formula, 1% tolerance identifies 80% of molecules; without it you need a
+  formula, 1% tolerance identifies 75% of molecules; without it you need a
   tolerance between 0.25% (90%) and 0.5% (57%).
 - **One extra observable helps nearly as much as the formula.** The dipole
-  magnitude alone takes 1%-tolerance identification from 12% to 70%.
+  magnitude alone takes 1%-tolerance identification from 12% to 70%; formula
+  and dipole together reach 95%.
 - **Ambiguity grows quickly with size** (`results/m1/unique_vs_size.png`): at 1%
   with A, B, C only, 63% of 7-heavy-atom molecules are unique but only 8% of
   9-heavy-atom ones.
@@ -85,6 +86,16 @@ pytest
 
 QM9 comes from the MoleculeNet mirror because figshare (the original host)
 blocks automated downloads.
+
+**Data caveat:** in the MoleculeNet `gdb9.sdf`, bond orders and formal charges
+are wrong for about 19% of molecules (25,173 have a net formal charge, although
+every QM9 molecule is neutral). Read naively with RDKit, those records gain
+implicit hydrogens and become different molecules. This code uses the SDF only
+for atoms and coordinates, re-perceives bonds from the geometry with total
+charge 0, and computes formulas from the explicit atoms. 6,837 molecules (5.1%)
+have no valid neutral Lewis structure from their geometry; they keep their
+constants and formula (milestone 1) but are excluded where a graph is needed
+(milestone 2).
 
 ## Layout
 

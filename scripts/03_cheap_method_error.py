@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from rotml.analysis.cheap_methods import evaluate_molecule
-from rotml.data.qm9 import RAW_DIR, SDF_NAME, iter_sdf
+from rotml.data.qm9 import RAW_DIR, SDF_NAME, iter_records
 from rotml.physics.rotor import is_linear
 
 DATA = Path("data/processed/qm9.csv")
@@ -32,8 +32,9 @@ OUT = Path("results/m2")
 def _work(args):
     sdf_index, ref_abc, k = args
     os.environ.setdefault("OMP_NUM_THREADS", "1")
-    (_, mol), = list(iter_sdf(RAW_DIR / SDF_NAME, [int(sdf_index)]))
-    return int(sdf_index), evaluate_molecule(mol, np.asarray(ref_abc), k_conformers=k)
+    (_, rec), = list(iter_records(RAW_DIR / SDF_NAME, [int(sdf_index)]))
+    return int(sdf_index), evaluate_molecule(rec.symbols, rec.coords, np.asarray(ref_abc),
+                                             k_conformers=k)
 
 
 def main() -> None:
@@ -45,7 +46,7 @@ def main() -> None:
     args = ap.parse_args()
 
     qm9 = pd.read_csv(DATA)
-    pool_df = qm9[qm9.sanitized & ~is_linear(qm9.A, qm9.B)]
+    pool_df = qm9[qm9.graph_ok & ~is_linear(qm9.A, qm9.B)]
     sample = pool_df.sample(n=args.n, random_state=args.seed)
     jobs = [(r.sdf_index, (r.A, r.B, r.C), args.k) for r in sample.itertuples()]
 
