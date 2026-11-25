@@ -4,6 +4,7 @@ Reads results/m2/constants_by_method.csv and writes:
     results/m2/error_summary.csv   bias, spread, tolerances and timing per method
     results/m2/funnel_link.csv     candidates surviving a stage run at each
                                    method's 95%-recall tolerance (via the M1 counts)
+    results/m2/by_rotatable_bonds.csv  95%-recall tolerance split by flexibility
     results/m2/recall_vs_tolerance.png
 
 A method's "tolerance at X% recall" is the relative tolerance on each rotational
@@ -22,6 +23,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.ticker import FuncFormatter, PercentFormatter
+
+from rdkit import Chem
+from rdkit.Chem import rdMolDescriptors
 
 from rotml.analysis.identifiability import count_matches
 from rotml.plotting import SERIES, SURFACE, TEXT_SECONDARY, apply_style
@@ -106,6 +110,25 @@ def funnel_link(summary: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def by_rotatable_bonds(d: pd.DataFrame) -> pd.DataFrame:
+    """Tolerance at 95% recall for rigid vs flexible molecules."""
+    n_rot = d.smiles.map(lambda smi: rdMolDescriptors.CalcNumRotatableBonds(Chem.MolFromSmiles(smi)))
+    bins = pd.cut(n_rot, [-1, 0, 1, 2, 99], labels=["0", "1", "2", "3+"])
+    rows = []
+    for label, grp in d.groupby(bins, observed=True):
+        embedded = grp[grp.n_conformers > 0]
+        row = {"rotatable_bonds": label, "n_molecules": len(grp),
+               "embed_failed_pct": 100 * (1 - len(embedded) / len(grp)),
+               "mean_conformers": embedded.n_conformers.mean()}
+        # Tolerances over molecules whose graph could be embedded (strained
+        # cages that ETKDG cannot embed are reported as embed_failed_pct).
+        for m in ("mmff_dft", "xtb_dft", "mmff_graph_best", "xtb_graph_best"):
+            err = np.max(np.abs(log_errors(embedded, m)), axis=1)
+            row[f"tol_95_{m}_pct"] = 100 * tolerance_at(err, 0.95)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def plot_recall(d: pd.DataFrame, out: Path) -> None:
     apply_style()
     grid = np.geomspace(0.001, 0.5, 200)
@@ -126,14 +149,14 @@ def plot_recall(d: pd.DataFrame, out: Path) -> None:
             label = name if "dft" in m else f"{name}, {'lowest energy' if dashed else 'best match'}"
             ax.plot(grid, recall, color=color[name], ls=(0, (4, 2)) if dashed else "-", label=label)
         ax.axhline(0.95, color=TEXT_SECONDARY, lw=1, ls=(0, (3, 3)))
-        ax.text(0.0011, 0.955, "95% recall", color=TEXT_SECONDARY, fontsize=8.5, va="bottom")
+        ax.text(0.0011, 0.935, "95% recall", color=TEXT_SECONDARY, fontsize=8.5, va="top")
         ax.set_xscale("log")
         ax.set_xticks([0.001, 0.003, 0.01, 0.03, 0.1, 0.3])
         ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _p: f"{x * 100:g}%"))
         ax.minorticks_off()
         ax.set_title(title, fontsize=11)
         ax.set_xlabel("Tolerance on each rotational constant")
-        ax.legend(loc="upper left")
+        ax.legend(loc="lower right")
     axes[0].set_ylabel("Molecules whose DFT A, B, C\nare reproduced within tolerance")
     axes[0].yaxis.set_major_formatter(PercentFormatter(1.0))
     axes[0].set_ylim(0, 1.02)
@@ -151,10 +174,13 @@ def main() -> None:
     summary.to_csv(M2 / "error_summary.csv", index=False, float_format="%.4g")
     link = funnel_link(summary)
     link.to_csv(M2 / "funnel_link.csv", index=False, float_format="%.4g")
+    flex = by_rotatable_bonds(d)
+    flex.to_csv(M2 / "by_rotatable_bonds.csv", index=False, float_format="%.4g")
     plot_recall(d, M2 / "recall_vs_tolerance.png")
     pd.set_option("display.width", 200)
     print(summary.drop(columns=["setting"]).round(3).to_string(index=False))
     print(link.drop(columns=["setting"]).round(3).to_string(index=False))
+    print(flex.round(2).to_string(index=False))
     print("n molecules:", len(d), " mean conformers:", round(d.n_conformers.mean(), 2))
 
 

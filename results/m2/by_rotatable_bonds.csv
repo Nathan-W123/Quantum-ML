@@ -1,0 +1,5 @@
+rotatable_bonds,n_molecules,embed_failed_pct,mean_conformers,tol_95_mmff_dft_pct,tol_95_xtb_dft_pct,tol_95_mmff_graph_best_pct,tol_95_xtb_graph_best_pct
+0,870,6.667,2.042,8.495,6.029,8.313,6.47
+1,579,2.418,3.513,15.61,7.383,15.19,15.7
+2,328,0.3049,4.768,18.97,9.373,26.2,22.14
+3+,223,0,7.04,18.97,9.085,34.84,31.89

@@ -1,0 +1,13 @@
+method,name,setting,tol_95_corrected_pct,condition,candidates_median,candidates_p90,survivor_frac_median
+mmff_dft,MMFF94,relaxed from DFT geometry,14.11,ABC,5401,1.163e+04,0.04034
+mmff_dft,MMFF94,relaxed from DFT geometry,14.11,ABC + formula,117,548,0.0008739
+xtb_dft,GFN2-xTB,relaxed from DFT geometry,6.752,ABC,798,1872,0.00596
+xtb_dft,GFN2-xTB,relaxed from DFT geometry,6.752,ABC + formula,23,101,0.0001718
+mmff_graph_best,MMFF94,"from graph, best-matching conformer",32.48,ABC,3.276e+04,5.379e+04,0.2447
+mmff_graph_best,MMFF94,"from graph, best-matching conformer",32.48,ABC + formula,526,2357,0.003929
+mmff_graph_lowest,MMFF94,"from graph, lowest-energy conformer",88.21,ABC,1.062e+05,1.192e+05,0.7931
+mmff_graph_lowest,MMFF94,"from graph, lowest-energy conformer",88.21,ABC + formula,1526,5015,0.0114
+xtb_graph_best,GFN2-xTB,"from graph, best-matching conformer",29.67,ABC,2.778e+04,4.713e+04,0.2075
+xtb_graph_best,GFN2-xTB,"from graph, best-matching conformer",29.67,ABC + formula,461,2084,0.003443
+xtb_graph_lowest,GFN2-xTB,"from graph, lowest-energy conformer",91.3,ABC,1.082e+05,1.204e+05,0.8079
+xtb_graph_lowest,GFN2-xTB,"from graph, lowest-energy conformer",91.3,ABC + formula,1557,5069,0.01163

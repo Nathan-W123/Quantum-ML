@@ -47,6 +47,8 @@ moment-of-inertia guidance come after the supervised baseline.
 
 1. **Identifiability on QM9** - how many molecules share A, B, C within a tolerance (done; `results/m1`).
 2. **Cheap-method error** - MMFF94 and GFN2-xTB vs DFT, sets funnel tolerances (done; `results/m2`).
+   GFN2-xTB needs ~7% tolerance for 95% recall on the right conformer; conformer
+   coverage, not method error, dominates for flexible molecules.
 3. **Baseline inverse model** - constants -> SELFIES transformer, formula split, recall@K, with/without formula; compare to rotconML.
 4. **KREED baseline** - reproduce on QM9, retrain with fewer/no isotopologue coordinates. (Removing the formula requires changing the model: that is the research contribution.)
 5. **Full pipeline** - transformer proposals -> physics scoring -> calibrated ranking; test on experimental CDMS/JPL constants.

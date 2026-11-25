@@ -14,7 +14,7 @@ pipeline design and the closest prior work.
 | Milestone | Status |
 |---|---|
 | 1. Identifiability of QM9 molecules from rotational constants | done |
-| 2. Error of cheap geometry methods (MMFF94, GFN2-xTB) vs DFT | in progress |
+| 2. Error of cheap geometry methods (MMFF94, GFN2-xTB) vs DFT | done |
 | 3. Baseline inverse model (constants -> SELFIES transformer) | next (needs a GPU) |
 | 4. KREED baseline and ablations | planned |
 | 5. Full propose -> verify -> rank pipeline | planned |
@@ -60,7 +60,78 @@ error.
 
 ## Milestone 2: how accurate are the cheap funnel stages?
 
-_Results are filled in from `results/m2/` once the benchmark finishes._
+The first funnel stages use cheap methods, and a stage can only discard
+candidates as aggressively as that method's error allows. For 2,000 random
+QM9 molecules, A, B, C were recomputed with MMFF94 (RDKit) and GFN2-xTB
+(tblite) and compared with the DFT values, in two settings:
+
+- **Same conformer:** relax starting from the DFT geometry. This isolates the
+  method's own error.
+- **Structure search:** start from the molecular graph only, embed 10 ETKDG
+  conformers, relax them, and take the best-matching (or lowest-energy) one.
+  This is what a funnel stage actually faces.
+
+The table gives the tolerance needed so that 95% of molecules still match.
+The 90% and 99% columns are in `results/m2/error_summary.csv`; the GFN2-xTB
+bias has been removed.
+
+| Method | Setting | Median error per constant | Tolerance for 95% recall | Time per molecule |
+|---|---|---|---|---|
+| MMFF94 | same conformer | 1.8% | 14.1% | 2 ms |
+| GFN2-xTB | same conformer | 1.6% (bias +1.1 to +1.7%) | **6.8%** | 0.3 s |
+| MMFF94 | structure search, best match | 1.8% | 32% | 0.24 s |
+| GFN2-xTB | structure search, best match | 1.7% | 30% | 1.8 s |
+| either | structure search, lowest energy | 2.6–3.2% | ~90% | — |
+
+![Recall vs tolerance](results/m2/recall_vs_tolerance.png)
+
+**Run at its 95%-recall tolerance, each stage keeps this many QM9 candidates**
+(median over all molecules, from the milestone 1 counts):
+
+| Stage | Tolerance | A, B, C only | + formula |
+|---|---|---|---|
+| GFN2-xTB, right conformer | 6.8% | 798 (0.6% of QM9) | 23 |
+| MMFF94, right conformer | 14.1% | 5,401 (4%) | 117 |
+| GFN2-xTB, structure search | 30% | 27,781 (21%) | 461 |
+| DFT-level, for comparison (M1) | 1% | 5 | 1 |
+
+**Finding the right conformer is the main source of error, more than the
+method's accuracy** (`results/m2/by_rotatable_bonds.csv`):
+
+| Rotatable bonds | Molecules | GFN2-xTB, right conformer | GFN2-xTB, structure search |
+|---|---|---|---|
+| 0 | 870 | 6.0% | 6.5% |
+| 1 | 579 | 7.4% | 15.7% |
+| 2 | 328 | 9.4% | 22.1% |
+| 3+ | 223 | 9.1% | 31.9% |
+
+Findings:
+
+- **GFN2-xTB beats MMFF94 by about 2x at 95% recall.** MMFF94's heavy tail
+  comes from torsions relaxing into a different conformer, often one where
+  the DFT structure was held by an intramolecular hydrogen bond. MMFF94 is
+  about 100x faster, so it works as a loose pre-filter.
+- **For rigid molecules, conformer search costs almost nothing.** With 2 or
+  more rotatable bonds, 10 ETKDG conformers usually miss the right one, and
+  the tolerance triples. A real funnel needs a proper conformer search (CREST)
+  or a model that also predicts the conformer.
+- **The lowest-energy conformer is a poor guess.** Part of this is a QM9
+  artifact: each QM9 molecule is stored as one arbitrary conformer, not its
+  global minimum. Cold molecular-beam and interstellar spectra come from
+  low-energy conformers, so this needs re-testing against conformer-searched
+  DFT references.
+- **GFN2-xTB constants are about 1.1–1.7% too large compared with B3LYP.**
+  This bias is easy to correct, but the spread, not the bias, sets the
+  tolerance.
+- **ETKDG cannot embed 3.6% of molecules** (strained polycyclic cages, 6.7%
+  of the rigid set), so the funnel needs a fallback embedding route.
+- **Even the best cheap stage leaves hundreds of candidates without a
+  formula.** That is the room for an ML surrogate (GNN) that predicts
+  DFT-quality constants from a cheap conformer, and for proposal models that
+  start with fewer, better candidates.
+
+Caveats: the reference is B3LYP, not experiment, and "right conformer" means
+QM9's stored conformer.
 
 ## Reproduce
 
@@ -79,7 +150,7 @@ curl -L -o data/raw/qm9_molnet/qm9.zip https://deepchemdata.s3-us-west-1.amazona
 python scripts/01_prepare_qm9.py              # ~1 min: data/processed/qm9.csv
 python scripts/02_identifiability.py          # ~30 s: milestone 1 tables
 python scripts/02b_plot_identifiability.py    # milestone 1 figures
-OMP_NUM_THREADS=1 python scripts/03_cheap_method_error.py --n 2000 --workers 4   # ~25 min on 4 cores
+OMP_NUM_THREADS=1 python scripts/03_cheap_method_error.py --n 2000 --workers 4   # ~18 min on 4 cores
 python scripts/03b_analyze_cheap_methods.py   # milestone 2 tables, figure, link to milestone 1
 pytest
 ```
