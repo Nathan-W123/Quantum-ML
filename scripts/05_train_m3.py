@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
 from pathlib import Path
 
@@ -54,6 +55,13 @@ DEFAULTS = {
     "max_train": None,
     "seed": 0,
 }
+
+
+def save_atomic(obj, path: Path) -> None:
+    """Write to a temporary file and rename, so an interrupted save never corrupts a checkpoint."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
 
 
 def pick_device(name: str) -> torch.device:
@@ -139,8 +147,11 @@ def main() -> None:
     ap.add_argument("--device", default="auto")
     ap.add_argument("--compile", action="store_true", help="torch.compile the model (GPU)")
     ap.add_argument("--resume", action="store_true", help="continue from <out>/last.pt")
+    ap.add_argument("--time-budget-min", type=float, default=None,
+                    help="stop cleanly after the epoch that exceeds this many minutes (resume later)")
     args = ap.parse_args()
 
+    started = time.time()
     cfg = DEFAULTS | json.loads(args.config.read_text())
     device = pick_device(args.device)
     torch.manual_seed(cfg["seed"])
@@ -220,12 +231,16 @@ def main() -> None:
                 "epoch": epoch, "vocab": vocab.itos}
         if row["val_loss"] < best:
             best = row["val_loss"]
-            torch.save(ckpt, args.out / "best.pt")
-        torch.save(ckpt | {"optimizer": opt.state_dict(), "scaler": scaler.state_dict(),
-                           "rng": g.get_state(), "step": step, "best": best, "history": history},
-                   args.out / "last.pt")
+            save_atomic(ckpt, args.out / "best.pt")
+        save_atomic(ckpt | {"optimizer": opt.state_dict(), "scaler": scaler.state_dict(),
+                            "rng": g.get_state(), "step": step, "best": best, "history": history},
+                    args.out / "last.pt")
         msg = " ".join(f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}" for k, v in row.items())
         print(msg, flush=True)
+        if args.time_budget_min and epoch < cfg["epochs"] \
+                and time.time() - started > 60 * args.time_budget_min:
+            print(f"time budget reached after epoch {epoch}; continue with --resume", flush=True)
+            return
     print(f"done in {time.time() - t0:.0f}s; best val_loss {best:.4f}")
 
 
