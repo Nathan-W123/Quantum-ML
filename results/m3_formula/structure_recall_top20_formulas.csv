@@ -1,0 +1,2 @@
+condition,noise_pct,n,decodes_per_molecule,mean_candidates,formula coverage@1,formula coverage@5,formula coverage@10,formula coverage@20,model recall@1,model recall@5,model recall@10,model recall@50,model recall@100
+"ABC, top-20 proposed formulas",0.5,200,200,178.8,0,0,0.045,0.235,0,0,0.005,0.045,0.06

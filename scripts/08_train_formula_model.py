@@ -1,7 +1,7 @@
 """Train the formula-proposal model (rotational constants -> molecular formula).
 
 Usage:
-    python scripts/08_train_formula_model.py --out runs/formula [--epochs 40]
+    python scripts/08_train_formula_model.py --out runs/formula [--epochs 12]
 
 Trained on the same formula split as the inverse model, with the same noise
 (0.1-1% on A, B, C, log-uniform) and the dipole shown half the time. Reports
@@ -61,13 +61,14 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", type=Path, default=Path("data/processed/m3"))
     ap.add_argument("--out", type=Path, default=Path("runs/formula"))
-    ap.add_argument("--epochs", type=int, default=40)
+    ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--threads", type=int, default=0, help="torch threads (0 = default)")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--independent", action="store_true",
-                    help="predict element counts independently (no conditioning on earlier elements)")
+    ap.add_argument("--autoregressive", action="store_true",
+                    help="condition each element count on the earlier ones (memorizes training "
+                         "formulas; default: independent per-element heads)")
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--train-noise", type=float, nargs=2, default=[0.001, 0.01],
                     help="log-uniform range of training noise on A, B, C")
@@ -81,7 +82,7 @@ def main() -> None:
 
     data = M3Data.load(args.data_dir)
     train = data.indices("train")
-    model = FormulaNet(dropout=args.dropout, autoregressive=not args.independent,
+    model = FormulaNet(dropout=args.dropout, autoregressive=args.autoregressive,
                        use_noise_slot=not args.ignore_noise_slot)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     steps = args.epochs * math.ceil(len(train) / args.batch)
