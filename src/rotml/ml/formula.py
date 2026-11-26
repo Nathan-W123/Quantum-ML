@@ -36,10 +36,9 @@ def is_valid_formula(counts: tuple[int, ...]) -> bool:
 
 
 def formula_string(counts: tuple[int, ...]) -> str:
-    """Hill-order formula string (C, H first, then alphabetical), matching the dataset."""
+    """Formula string in the dataset's convention (rotml.data.qm9.hill_formula: C, H, then alphabetical)."""
     d = dict(zip(F.ELEMENTS, counts))
-    order = ["C", "H", "F", "N", "O"] if d["C"] else sorted(F.ELEMENTS)
-    return "".join(f"{e}{d[e] if d[e] > 1 else ''}" for e in order if d[e])
+    return "".join(f"{e}{d[e] if d[e] > 1 else ''}" for e in ("C", "H", "F", "N", "O") if d[e])
 
 
 class FormulaNet(nn.Module):
