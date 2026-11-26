@@ -15,7 +15,7 @@ pipeline design and the closest prior work.
 |---|---|
 | 1. Identifiability of QM9 molecules from rotational constants | done |
 | 2. Error of cheap geometry methods (MMFF94, GFN2-xTB) vs DFT | done |
-| 3. Baseline inverse model (constants -> SELFIES transformer) | code ready; CPU pilot done; full run needs a GPU |
+| 3. Baseline inverse model (constants -> SELFIES transformer) | code ready; CPU pilot run (pipeline works, model too small to use the constants); full run needs a GPU |
 | 4. KREED baseline and ablations | planned |
 | 5. Full propose -> verify -> rank pipeline | planned |
 
@@ -154,7 +154,43 @@ trains with checkpoints on Google Drive (`--resume` survives disconnects), and
 evaluates. On this repo's 4-CPU container the full model takes about 15 min
 per epoch, so the full 150-epoch run is a GPU job.
 
-_CPU pilot results are added here when the pilot run finishes._
+### CPU pilot (not the real experiment)
+
+To check the pipeline end to end, a **1.4M-parameter** version (d=128, 3+3
+layers) was trained for **12 epochs on 4 CPUs** (49 min), about 1/7 the size
+and 1/12 the training of the planned run. Evaluation used 400 held-out test
+molecules at 0.5% noise, with beam 10 + 100 samples
+(`results/m3_pilot/`):
+
+| Condition | Model recall@1 | @10 | @100 | Random isomer of right formula @1 / @10 / @100 | Library reference @1 / @10 |
+|---|---|---|---|---|---|
+| A, B, C | 0.0% | 0.0% | 0.0% | ~0 | 43% / 94% |
+| + formula | 1.0% | 5.8% | 11.0% | 1.0% / 4.5% / 27.6% | 91% / 100% |
+| + dipole | 0.0% | 0.3% | 0.5% | ~0 | 87% / 100% |
+| + formula + dipole | 1.0% | 7.2% | 12.5% | 1.0% / 4.5% / 27.6% | 98% / 100% |
+
+What the pilot shows:
+
+- **The pipeline works.** Training, checkpointing, resuming, decoding and
+  evaluation all run; validation token accuracy reached 69% and the
+  auxiliary formula loss fell from 0.62 to 0.33.
+- **The pilot model has not learned to use the rotational constants yet.**
+  When given the formula, it produces a molecule of that formula 72% of the
+  time, but its recall is no better than picking random isomers of that
+  formula (and worse at K=100, because random isomers come from QM9's own
+  list while the model has to write valid structures from scratch). Without
+  the formula it finds almost nothing.
+- **It is underfitting, not overfitting.** Recall on training molecules is
+  about the same as on test molecules (+ formula: 9.5% vs 11% at K=100), so
+  the bottleneck is model size and training time, not the formula split.
+
+So the pilot is evidence about the code, not about the idea. The GPU run is
+the real test. To count as progress, it has to clearly beat the
+random-isomer baseline. The library reference shows how much information
+the inputs carry. If the full model also stays near the random-isomer level,
+the decoder is not conditioning on the precise continuous values, and the
+next things to try are physics re-ranking of candidates (milestone 5),
+contrastive pre-training and stronger value conditioning.
 
 ## Reproduce
 

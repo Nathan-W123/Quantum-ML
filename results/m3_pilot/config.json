@@ -1,0 +1,48 @@
+{
+ "train": {
+  "data_dir": "data/processed/m3",
+  "model": {
+   "d_model": 128,
+   "n_heads": 4,
+   "enc_layers": 3,
+   "dec_layers": 3,
+   "ffn_dim": 512,
+   "dropout": 0.1,
+   "n_freq": 32
+  },
+  "batch_size": 256,
+  "lr": 0.0005,
+  "weight_decay": 0.01,
+  "warmup_steps": 1000,
+  "epochs": 12,
+  "label_smoothing": 0.1,
+  "aux_weight": 0.1,
+  "noise_min": 0.001,
+  "noise_max": 0.01,
+  "p_formula": 0.5,
+  "p_dipole": 0.5,
+  "random_variants": true,
+  "grad_clip": 1.0,
+  "eval_every": 4,
+  "eval_recall_n": 128,
+  "max_train": null,
+  "seed": 0
+ },
+ "model": {
+  "vocab_size": 53,
+  "max_len": 29,
+  "n_obs": 12,
+  "d_model": 128,
+  "n_heads": 4,
+  "enc_layers": 3,
+  "dec_layers": 3,
+  "ffn_dim": 512,
+  "dropout": 0.1,
+  "n_freq": 32,
+  "n_aux": 5
+ },
+ "n_params": 1443205,
+ "device": "cpu",
+ "n_train": 107625,
+ "n_val": 6390
+}

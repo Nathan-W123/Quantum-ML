@@ -14,6 +14,10 @@ same noisy observations. That needs a library containing the answer, so it is
 close to an upper bound; the generative model has no library and has never
 seen these formulas.
 
+A second, lower reference is "random isomer": with the formula known, pick K
+random QM9 molecules of that formula (expected recall min(1, K / n_isomers)).
+A model that uses the rotational constants must beat it.
+
 Writes to <run>/eval/: summary.csv, per_molecule_ranks.csv.
 """
 
@@ -70,6 +74,8 @@ def main() -> None:
     idx = idx[torch.randperm(len(idx), generator=torch.Generator().manual_seed(0))][: args.n_eval]
     targets = [data.smiles[int(i)] for i in idx]
     formulas = pd.read_csv(data_dir / "m3_molecules.csv").formula.to_numpy()
+    isomer_counts = pd.Series(formulas).value_counts()
+    n_isomers = np.array([isomer_counts[formulas[int(i)]] for i in idx])
     ks = [k for k in (1, 5, 10, 50, 100, 500, 1000) if k <= max(args.beam, args.samples + args.beam)]
 
     out_dir = args.run / "eval"
@@ -100,6 +106,8 @@ def main() -> None:
                    "top1_formula_acc": top1_formula_accuracy(ranked, targets)}
             row |= {f"model {k}": v for k, v in recall_at_k(ranked, targets, ks).items()}
             row |= {f"library recall@{k}": float(np.mean(lib_rank <= k)) for k in ks}
+            pool = n_isomers if formula else np.full(len(idx), len(formulas))
+            row |= {f"random isomer recall@{k}": float(np.mean(np.minimum(1.0, k / pool))) for k in ks}
             rows.append(row)
             per_mol[f"model_rank {cond} @{noise}"] = model_rank
             per_mol[f"library_rank {cond} @{noise}"] = lib_rank
