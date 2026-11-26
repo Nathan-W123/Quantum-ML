@@ -44,11 +44,13 @@ def formula_string(counts: tuple[int, ...]) -> str:
 
 class FormulaNet(nn.Module):
     def __init__(self, d: int = 256, n_layers: int = 3, n_freq: int = 32, d_slot: int = 64,
-                 dropout: float = 0.1, autoregressive: bool = True):
+                 dropout: float = 0.1, autoregressive: bool = True, use_noise_slot: bool = True):
         super().__init__()
         self.config = {"d": d, "n_layers": n_layers, "n_freq": n_freq, "d_slot": d_slot,
-                       "dropout": dropout, "autoregressive": autoregressive}
+                       "dropout": dropout, "autoregressive": autoregressive,
+                       "use_noise_slot": use_noise_slot}
         self.autoregressive = autoregressive
+        self.use_noise_slot = use_noise_slot
         n = len(INPUT_SLOTS)
         self.value_emb = FourierValueEmbedding(d_slot, n_freq)
         self.slot_emb = nn.Parameter(torch.zeros(n, d_slot))
@@ -63,6 +65,9 @@ class FormulaNet(nn.Module):
 
     def trunk(self, values: torch.Tensor, present: torch.Tensor) -> torch.Tensor:
         v, p = values[:, INPUT_SLOTS], present[:, INPUT_SLOTS]
+        if not self.use_noise_slot:  # trained at a fixed noise range; ignore the stated noise
+            p = p.clone()
+            p[:, INPUT_SLOTS.index(F.NOISE[0])] = False
         x = (self.value_emb(v) + self.slot_emb) * p[..., None]
         h = self.inp(torch.cat([x.flatten(1), p.float()], dim=1))
         for block in self.blocks:

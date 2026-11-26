@@ -28,10 +28,11 @@ KS = (1, 5, 10, 20, 50)
 
 
 def batch_features(data: M3Data, idx: torch.Tensor, g: torch.Generator, noise: float | None,
-                   dipole: bool | None):
+                   dipole: bool | None, noise_range: tuple[float, float] = (0.001, 0.01)):
     n = len(idx)
-    if noise is None:
-        noise_t = 10 ** (torch.rand(n, generator=g, dtype=torch.float64) - 3)  # 0.1-1%
+    if noise is None:  # log-uniform in noise_range
+        lo, hi = math.log10(noise_range[0]), math.log10(noise_range[1])
+        noise_t = 10 ** (lo + (hi - lo) * torch.rand(n, generator=g, dtype=torch.float64))
     else:
         noise_t = torch.full((n,), noise, dtype=torch.float64)
     present = (F.random_condition_mask(n, 0.0, 0.5, g) if dipole is None
@@ -68,6 +69,10 @@ def main() -> None:
     ap.add_argument("--independent", action="store_true",
                     help="predict element counts independently (no conditioning on earlier elements)")
     ap.add_argument("--dropout", type=float, default=0.1)
+    ap.add_argument("--train-noise", type=float, nargs=2, default=[0.001, 0.01],
+                    help="log-uniform range of training noise on A, B, C")
+    ap.add_argument("--ignore-noise-slot", action="store_true",
+                    help="do not give the model the stated noise level")
     args = ap.parse_args()
     if args.threads:
         torch.set_num_threads(args.threads)
@@ -76,7 +81,8 @@ def main() -> None:
 
     data = M3Data.load(args.data_dir)
     train = data.indices("train")
-    model = FormulaNet(dropout=args.dropout, autoregressive=not args.independent)
+    model = FormulaNet(dropout=args.dropout, autoregressive=not args.independent,
+                       use_noise_slot=not args.ignore_noise_slot)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     steps = args.epochs * math.ceil(len(train) / args.batch)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=steps, pct_start=0.05)
@@ -89,7 +95,7 @@ def main() -> None:
         tot = 0.0
         for s in range(0, len(perm), args.batch):
             idx = perm[s:s + args.batch]
-            values, present = batch_features(data, idx, g, None, None)
+            values, present = batch_features(data, idx, g, None, None, tuple(args.train_noise))
             loss = model.nll(values, present, data.counts[idx])
             opt.zero_grad(set_to_none=True)
             loss.backward()

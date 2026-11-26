@@ -1,15 +1,16 @@
 """Re-rank the inverse model's candidates with physics (first milestone 5 prototype).
 
 Usage:
-    python scripts/07_physics_rerank.py --run runs/m3_cpu_medium --out runs/m3_rerank --n 100 \
-        [--workers 4] [--time-budget-min 100]
+    python scripts/07_physics_rerank.py --run runs/m3_cpu_medium --out runs/m3_rerank --n 200 \
+        [--top 30] [--workers 4] [--time-budget-min 100]
 
 Stages, each resumable (re-run the same command to continue):
 
 1. candidates.json - model candidates (beam 10 + 100 samples) for n test
    molecules, the first n of the molecules 06_eval_m3.py evaluates, with
    0.5% noise on A, B, C and the formula given.
-2. physics.jsonl - A, B, C of every distinct candidate's conformers (stereo-
+2. physics.jsonl - A, B, C of the conformers of every distinct candidate in
+   each molecule's top --top model candidates (stereo-
    isomers -> ETKDG -> MMFF94 -> GFN2-xTB), cached by SMILES and computed in
    parallel. Stops cleanly at the time budget.
 3. summary.csv, per_molecule.csv - recall@K for several rankings of the same
@@ -21,7 +22,8 @@ Stages, each resumable (re-run the same command to continue):
      DFT lookup (oracle)       candidates that are QM9 molecules, ranked by their
                                DFT constants: what exact physics with a known
                                conformer would do. Candidates outside QM9 rank last.
-   "in candidates" is the ceiling for every re-ranking.
+   All rankings re-order the same top --top list; "in candidates" (the true
+   structure is in that list) is the ceiling for every re-ranking.
 """
 
 from __future__ import annotations
@@ -44,7 +46,7 @@ from rotml.analysis.rerank import (XTB_BIAS, XTB_SIGMA, candidate_constants,  # 
                                    fit_sq_error, physics_loglik)
 
 MMFF_SIGMA = 0.027  # robust per-constant spread of MMFF94 vs B3LYP, searched conformer (milestone 2)
-KS = (1, 5, 10)
+KS = (1, 5, 10, 30)
 
 
 def stage_candidates(args, path: Path) -> list[dict]:
@@ -94,11 +96,12 @@ def _work(smiles: str) -> dict:
         return {"smiles": smiles, "status": f"error: {type(exc).__name__}", "mmff": [], "xtb": []}
 
 
-def stage_physics(rows: list[dict], path: Path, workers: int, budget_s: float, t_start: float) -> bool:
+def stage_physics(rows: list[dict], path: Path, workers: int, budget_s: float, t_start: float,
+                  top: int) -> bool:
     done = set()
     if path.exists():
         done = {json.loads(line)["smiles"] for line in path.read_text().splitlines() if line.strip()}
-    todo = sorted({smi for r in rows for smi, _ in r["candidates"]} - done)
+    todo = sorted({smi for r in rows for smi, _ in r["candidates"][:top]} - done)
     total = len(done) + len(todo)
     print(f"physics: {len(done)}/{total} distinct candidates cached, {len(todo)} to do", flush=True)
     if not todo:
@@ -124,7 +127,8 @@ def rank_of(target: str, smiles: list[str], score: np.ndarray) -> float:
     return float(np.where(np.array(smiles)[order] == target)[0][0] + 1)
 
 
-def stage_rank(rows: list[dict], physics_path: Path, data_dir: Path, noise: float, out: Path) -> None:
+def stage_rank(rows: list[dict], physics_path: Path, data_dir: Path, noise: float, out: Path,
+               top: int) -> None:
     phys = {}
     for line in physics_path.read_text().splitlines():
         if line.strip():
@@ -141,8 +145,8 @@ def stage_rank(rows: list[dict], physics_path: Path, data_dir: Path, noise: floa
     sig_mmff = math.hypot(MMFF_SIGMA, noise)
     per_mol, stats = [], {"candidates": [], "xtb_ok": [], "in_qm9": [], "seconds": []}
     for r in rows:
-        smiles = [c[0] for c in r["candidates"]]
-        logp = np.array([c[1] for c in r["candidates"]])
+        smiles = [c[0] for c in r["candidates"][:top]]
+        logp = np.array([c[1] for c in r["candidates"][:top]])
         obs = np.array(r["obs_abc"])
         xtb_err = np.array([fit_sq_error(phys[s]["xtb"], obs, XTB_BIAS) for s in smiles])
         mmff_err = np.array([fit_sq_error(phys[s]["mmff"], obs) for s in smiles])
@@ -198,6 +202,7 @@ def main() -> None:
     ap.add_argument("--noise", type=float, default=0.005)
     ap.add_argument("--samples", type=int, default=100)
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--top", type=int, default=30, help="physics for each molecule's top-N model candidates")
     ap.add_argument("--time-budget-min", type=float, default=float("inf"))
     args = ap.parse_args()
     t_start = time.time()
@@ -207,11 +212,12 @@ def main() -> None:
     if len(rows) != args.n:
         raise SystemExit(f"{args.out}/candidates.json has {len(rows)} molecules, not --n {args.n}")
     if not stage_physics(rows, args.out / "physics.jsonl", args.workers,
-                         args.time_budget_min * 60, t_start):
+                         args.time_budget_min * 60, t_start, args.top):
         return
     import torch
     ckpt = torch.load(args.run / "best.pt", map_location="cpu", weights_only=False)
-    stage_rank(rows, args.out / "physics.jsonl", Path(ckpt["train_config"]["data_dir"]), args.noise, args.out)
+    stage_rank(rows, args.out / "physics.jsonl", Path(ckpt["train_config"]["data_dir"]), args.noise,
+               args.out, args.top)
 
 
 if __name__ == "__main__":
