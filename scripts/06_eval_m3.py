@@ -18,6 +18,12 @@ A second, lower reference is "random isomer": with the formula known, pick K
 random QM9 molecules of that formula (expected recall min(1, K / n_isomers)).
 A model that uses the rotational constants must beat it.
 
+Control (--decoy-constants): each molecule's A, B, C and dipole are replaced
+by those of a different QM9 molecule with the same formula, while recall is
+still scored against the true molecule. A model that uses the constants should
+fall to about the random-isomer level; one that only uses the formula should
+not change.
+
 Writes to <run>/eval/: summary.csv, per_molecule_ranks.csv.
 """
 
@@ -58,6 +64,8 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--decoy-constants", action="store_true",
+                    help="control: observe the constants of a different isomer of the same formula")
     args = ap.parse_args()
 
     device = pick_device(args.device)
@@ -76,6 +84,18 @@ def main() -> None:
     formulas = pd.read_csv(data_dir / "m3_molecules.csv").formula.to_numpy()
     isomer_counts = pd.Series(formulas).value_counts()
     n_isomers = np.array([isomer_counts[formulas[int(i)]] for i in idx])
+    obs_idx = idx
+    if args.decoy_constants:
+        by_formula: dict[str, list[int]] = {}
+        for j, f in enumerate(formulas):
+            by_formula.setdefault(f, []).append(j)
+        rng = np.random.default_rng(0)
+        decoys = []
+        for i in idx.tolist():
+            others = [j for j in by_formula[formulas[i]] if j != i]
+            decoys.append(int(rng.choice(others)) if others else i)
+        obs_idx = torch.as_tensor(decoys, dtype=idx.dtype)
+        print(f"decoy constants: {int((obs_idx != idx).sum())}/{len(idx)} molecules get another isomer's constants")
     ks = [k for k in (1, 5, 10, 50, 100, 500, 1000) if k <= max(args.beam, args.samples + args.beam)]
 
     out_dir = args.run / "eval"
@@ -85,7 +105,7 @@ def main() -> None:
     for noise in args.noise:
         g = torch.Generator().manual_seed(int(noise * 1e6))
         noise_t = torch.full((len(idx),), noise, dtype=torch.float64)
-        abc, mu = F.perturb(data.abc[idx], data.mu[idx], noise_t, g)
+        abc, mu = F.perturb(data.abc[obs_idx], data.mu[obs_idx], noise_t, g)
         for cond in args.conditions:
             formula, dipole = F.CONDITIONS[cond]
             present = F.condition_mask(len(idx), formula, dipole)
