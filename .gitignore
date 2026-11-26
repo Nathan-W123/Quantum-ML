@@ -15,3 +15,6 @@ results/**/*.log
 
 # Third-party binaries
 /tools/
+
+# Training runs and checkpoints (pilot summaries are copied to results/)
+/runs/

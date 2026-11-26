@@ -1,0 +1,19 @@
+{
+  "data_dir": "data/processed/m3",
+  "model": {
+    "d_model": 128,
+    "n_heads": 4,
+    "enc_layers": 3,
+    "dec_layers": 3,
+    "ffn_dim": 512,
+    "dropout": 0.1,
+    "n_freq": 32
+  },
+  "batch_size": 256,
+  "lr": 0.0005,
+  "warmup_steps": 1000,
+  "epochs": 12,
+  "eval_every": 4,
+  "eval_recall_n": 128,
+  "seed": 0
+}

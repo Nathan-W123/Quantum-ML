@@ -50,6 +50,8 @@ moment-of-inertia guidance come after the supervised baseline.
    GFN2-xTB needs ~7% tolerance for 95% recall on the right conformer; conformer
    coverage, not method error, dominates for flexible molecules.
 3. **Baseline inverse model** - constants -> SELFIES transformer, formula split, recall@K, with/without formula; compare to rotconML.
+   Code, configs and Colab notebook ready (`src/rotml/ml`, `scripts/04-06`, `notebooks/m3_train_colab.ipynb`);
+   the 9.65M-parameter run needs a GPU.
 4. **KREED baseline** - reproduce on QM9, retrain with fewer/no isotopologue coordinates. (Removing the formula requires changing the model: that is the research contribution.)
 5. **Full pipeline** - transformer proposals -> physics scoring -> calibrated ranking; test on experimental CDMS/JPL constants.
 

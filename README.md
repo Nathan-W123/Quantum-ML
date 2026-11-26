@@ -15,7 +15,7 @@ pipeline design and the closest prior work.
 |---|---|
 | 1. Identifiability of QM9 molecules from rotational constants | done |
 | 2. Error of cheap geometry methods (MMFF94, GFN2-xTB) vs DFT | done |
-| 3. Baseline inverse model (constants -> SELFIES transformer) | next (needs a GPU) |
+| 3. Baseline inverse model (constants -> SELFIES transformer) | code ready; CPU pilot done; full run needs a GPU |
 | 4. KREED baseline and ablations | planned |
 | 5. Full propose -> verify -> rank pipeline | planned |
 
@@ -133,11 +133,35 @@ Findings:
 Caveats: the reference is B3LYP, not experiment, and "right conformer" means
 QM9's stored conformer.
 
+## Milestone 3: inverse model (observables -> structure)
+
+An encoder-decoder transformer that proposes candidate structures for a
+molecule it has never seen, from its rotational constants and optionally its
+formula and dipole magnitude.
+
+| Part | Choice |
+|---|---|
+| Inputs | One encoder token per observable: log A, log B, log C, asymmetry kappa, inertial defect, dipole magnitude, element counts (C, H, N, O, F), noise level. Unknown observables are masked out of attention. |
+| Output | SELFIES string of the stereo-free structure (enantiomers have identical rotational spectra). Up to 29 tokens, vocabulary of 53. |
+| Model | 4-layer encoder, 6-layer decoder, d=256, 8 heads: **9.65M parameters**. Values enter through Fourier features so 0.1% differences are resolvable. Auxiliary head predicts the formula. |
+| Training | Supervised, cross-entropy with label smoothing, AdamW with warmup and cosine decay. **One model for all conditions**: formula and dipole are each shown with probability 0.5, and noise on A, B, C is drawn from 0.1-1% (log-uniform) and given to the model. Fresh noise and a random SELFIES variant (of 5) each epoch. |
+| Data | 127,035 QM9 molecules (valid graph, non-linear), **split by formula**: 107,625 train / 6,390 val / 13,020 test, with 499 / 26 / 85 formulas. Every test molecule has a formula never seen in training. |
+| Evaluation | Recall@K: is the true structure among the top K deduplicated candidates (beam search + sampling, ranked by log-probability)? Reported per noise level and condition, next to the **library-lookup reference** (rank all 127k molecules, including the answer, by chi-square fit), which is close to the best achievable. |
+
+**To train on a GPU**, open [`notebooks/m3_train_colab.ipynb`](notebooks/m3_train_colab.ipynb)
+in Google Colab with a GPU runtime. It clones the repo, builds the data,
+trains with checkpoints on Google Drive (`--resume` survives disconnects), and
+evaluates. On this repo's 4-CPU container the full model takes about 15 min
+per epoch, so the full 150-epoch run is a GPU job.
+
+_CPU pilot results are added here when the pilot run finishes._
+
 ## Reproduce
 
 ```bash
 uv venv .venv && source .venv/bin/activate
-uv pip install -e ".[dev]" tblite ase
+uv pip install -e ".[dev,xtb,ml]"
+# CPU-only machines: uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
 ```bash
@@ -152,6 +176,9 @@ python scripts/02_identifiability.py          # ~30 s: milestone 1 tables
 python scripts/02b_plot_identifiability.py    # milestone 1 figures
 OMP_NUM_THREADS=1 python scripts/03_cheap_method_error.py --n 2000 --workers 4   # ~18 min on 4 cores
 python scripts/03b_analyze_cheap_methods.py   # milestone 2 tables, figure, link to milestone 1
+python scripts/04_build_m3_dataset.py         # ~2 min: data/processed/m3/
+python scripts/05_train_m3.py --config configs/m3_baseline.json --out runs/m3_baseline   # GPU
+python scripts/06_eval_m3.py --run runs/m3_baseline --n-eval 2000 --samples 1000
 pytest
 ```
 
@@ -176,8 +203,16 @@ src/rotml/
   data/qm9.py                    QM9 SDF + CSV loader
   analysis/identifiability.py    k-d tree match counting (milestone 1)
   analysis/cheap_methods.py      MMFF94 / GFN2-xTB / conformer search (milestone 2)
+  ml/features.py                 observable slots, noise, condition masks (milestone 3)
+  ml/tokens.py                   SELFIES vocabulary and canonical comparison
+  ml/dataset.py                  formula-split dataset build and batching
+  ml/model.py                    encoder-decoder transformer
+  ml/decode.py                   beam search, sampling, candidate ranking
+  ml/metrics.py                  recall@K, library-lookup reference
   plotting.py                    figure style
 scripts/                         numbered pipeline steps
+configs/                         training configs (baseline, CPU pilot, tiny smoke test)
+notebooks/m3_train_colab.ipynb   GPU training on Google Colab
 results/m1, results/m2           summary tables and figures (large per-molecule files are gitignored)
 tests/                           unit tests
 docs/research_plan.md            plan, pipeline, prior work
