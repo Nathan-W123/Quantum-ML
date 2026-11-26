@@ -67,8 +67,8 @@ def main() -> None:
     n = int(test["n"].iloc[0])
     noise = test["noise_pct"].iloc[0]
     fig.suptitle(f"Held-out formulas: {n} test molecules, {noise:g}% noise on A, B, C",
-                 x=0.06, ha="left", fontsize=10, color=TEXT_SECONDARY)
-    fig.tight_layout(rect=(0, 0.07, 1, 0.97))
+                 x=0.06, y=0.975, ha="left", fontsize=10, color=TEXT_SECONDARY)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.985))
     out = args.results / "recall_at_k.png"
     fig.savefig(out, dpi=200)
     print(f"wrote {out}")

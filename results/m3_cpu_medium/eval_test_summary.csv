@@ -1,0 +1,5 @@
+noise_pct,condition,n,mean_candidates,top1_formula_acc,model recall@1,model recall@5,model recall@10,model recall@50,model recall@100,library recall@1,library recall@5,library recall@10,library recall@50,library recall@100,random isomer recall@1,random isomer recall@5,random isomer recall@10,random isomer recall@50,random isomer recall@100
+0.5,ABC,500,106.6,0.01,0.002,0.012,0.026,0.044,0.046,0.432,0.842,0.938,0.998,1,7.872e-06,3.936e-05,7.872e-05,0.0003936,0.0007872
+0.5,ABC + formula,500,93.79,0.958,0.118,0.322,0.432,0.516,0.518,0.908,0.996,1,1,1,0.008571,0.02552,0.04419,0.1662,0.2761
+0.5,ABC + |mu|,500,105.7,0.034,0.006,0.04,0.06,0.088,0.09,0.884,0.996,1,1,1,7.872e-06,3.936e-05,7.872e-05,0.0003936,0.0007872
+0.5,ABC + formula + |mu|,500,93.05,0.962,0.142,0.35,0.45,0.54,0.54,0.984,1,1,1,1,0.008571,0.02552,0.04419,0.1662,0.2761

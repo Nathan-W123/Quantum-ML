@@ -15,7 +15,7 @@ pipeline design and the closest prior work.
 |---|---|
 | 1. Identifiability of QM9 molecules from rotational constants | done |
 | 2. Error of cheap geometry methods (MMFF94, GFN2-xTB) vs DFT | done |
-| 3. Baseline inverse model (constants -> SELFIES transformer) | code ready; CPU pilot run (pipeline works, model too small to use the constants); full run needs a GPU |
+| 3. Baseline inverse model (constants -> SELFIES transformer) | 3.8M-parameter CPU run done: with the formula, 43% top-10 recall on unseen formulas (random isomers: 4.4%); without it, 3%. Full 9.65M-parameter run needs a GPU |
 | 4. KREED baseline and ablations | planned |
 | 5. Full propose -> verify -> rank pipeline | planned |
 
@@ -148,49 +148,74 @@ formula and dipole magnitude.
 | Data | 127,035 QM9 molecules (valid graph, non-linear), **split by formula**: 107,625 train / 6,390 val / 13,020 test, with 499 / 26 / 85 formulas. Every test molecule has a formula never seen in training. |
 | Evaluation | Recall@K: is the true structure among the top K deduplicated candidates (beam search + sampling, ranked by log-probability)? Reported per noise level and condition, next to the **library-lookup reference** (rank all 127k molecules, including the answer, by chi-square fit), which is close to the best achievable. |
 
-**To train on a GPU**, open [`notebooks/m3_train_colab.ipynb`](notebooks/m3_train_colab.ipynb)
+**To train the full model on a GPU**, open [`notebooks/m3_train_colab.ipynb`](notebooks/m3_train_colab.ipynb)
 in Google Colab with a GPU runtime. It clones the repo, builds the data,
 trains with checkpoints on Google Drive (`--resume` survives disconnects), and
-evaluates. On this repo's 4-CPU container the full model takes about 15 min
-per epoch, so the full 150-epoch run is a GPU job.
+evaluates. On this repo's 4-CPU container the 9.65M-parameter model takes
+about 15 min per epoch, so its 150-epoch run is a GPU job.
 
-### CPU pilot (not the real experiment)
+### CPU run: 3.8M parameters, 45 epochs
 
-To check the pipeline end to end, a **1.4M-parameter** version (d=128, 3+3
-layers) was trained for **12 epochs on 4 CPUs** (49 min), about 1/7 the size
-and 1/12 the training of the planned run. Evaluation used 400 held-out test
-molecules at 0.5% noise, with beam 10 + 100 samples
-(`results/m3_pilot/`):
+A smaller version (d=192, 3-layer encoder, 4-layer decoder: **3.82M
+parameters**, `configs/m3_cpu_medium.json`) was trained for **45 epochs on 4
+CPUs** (5.8 h, in resumable 100-minute chunks). Evaluation used **500
+held-out test molecules** (formulas never seen in training) at 0.5% noise on
+A, B, C, with beam 10 + 100 samples per molecule (`results/m3_cpu_medium/`).
 
-| Condition | Model recall@1 | @10 | @100 | Random isomer of right formula @1 / @10 / @100 | Library reference @1 / @10 |
+"Recall@K" is how often the true structure is among the model's top K
+candidates.
+
+| Condition | Model recall@1 | @10 | @100 | Random isomer @1 / @10 / @100 | Library reference @1 / @10 |
 |---|---|---|---|---|---|
-| A, B, C | 0.0% | 0.0% | 0.0% | ~0 | 43% / 94% |
-| + formula | 1.0% | 5.8% | 11.0% | 1.0% / 4.5% / 27.6% | 91% / 100% |
-| + dipole | 0.0% | 0.3% | 0.5% | ~0 | 87% / 100% |
-| + formula + dipole | 1.0% | 7.2% | 12.5% | 1.0% / 4.5% / 27.6% | 98% / 100% |
+| A, B, C | 0.2% | 2.6% | 4.6% | ~0 / ~0 / 0.1% | 43% / 94% |
+| + formula | **11.8%** | **43.2%** | **51.8%** | 0.9% / 4.4% / 27.6% | 91% / 100% |
+| + dipole | 0.6% | 6.0% | 9.0% | ~0 / ~0 / 0.1% | 88% / 100% |
+| + formula + dipole | **14.2%** | **45.0%** | **54.0%** | 0.9% / 4.4% / 27.6% | 98% / 100% |
+| + formula, **decoy constants** (control) | 0.6% | 3.2% | 4.4% | 0.9% / 4.4% / 27.6% | - |
 
-What the pilot shows:
+![Recall@K on held-out formulas](results/m3_cpu_medium/recall_at_k.png)
 
-- **The pipeline works.** Training, checkpointing, resuming, decoding and
-  evaluation all run; validation token accuracy reached 69% and the
-  auxiliary formula loss fell from 0.62 to 0.33.
-- **The pilot model has not learned to use the rotational constants yet.**
-  When given the formula, it produces a molecule of that formula 72% of the
-  time, but its recall is no better than picking random isomers of that
-  formula (and worse at K=100, because random isomers come from QM9's own
-  list while the model has to write valid structures from scratch). Without
-  the formula it finds almost nothing.
-- **It is underfitting, not overfitting.** Recall on training molecules is
-  about the same as on test molecules (+ formula: 9.5% vs 11% at K=100), so
-  the bottleneck is model size and training time, not the formula split.
+Findings:
 
-So the pilot is evidence about the code, not about the idea. The GPU run is
-the real test. To count as progress, it has to clearly beat the
-random-isomer baseline. The library reference shows how much information
-the inputs carry. If the full model also stays near the random-isomer level,
-the decoder is not conditioning on the precise continuous values, and the
-next things to try are physics re-ranking of candidates (milestone 5),
-contrastive pre-training and stronger value conditioning.
+- **Given the formula, the model uses the rotational constants.** Its top-10
+  list contains the right structure 43% of the time, against 4.4% for 10
+  random isomers of the same formula (about 10x); for the top-1 guess it is
+  12% against 0.9%. The **decoy control** settles where this comes from: when
+  each molecule is given the constants of a *different* isomer with the same
+  formula, recall for the true molecule falls to 3.2% at K=10, below even
+  random isomers, because the model now proposes structures that fit the
+  decoy constants.
+- **Without the formula it is still weak** (4.6% at K=100), although that is
+  about 60x better than random picks from all of QM9. Inferring the formula
+  is the hard part: only 1% of top-1 candidates have the right formula on test
+  molecules (8% on training molecules). With a formula split, every test
+  formula is one the model has never produced, which is why removing the
+  formula requirement is the research problem (milestone 4).
+- **About half the time the right structure is not proposed at all.** With
+  the formula, the 110 decodes give about 94 distinct candidates and recall
+  stops rising after K=50 (51.6% at 50, 51.8% at 100). More sampling will
+  add little; a stronger model is needed.
+- **No overfitting to training formulas.** Recall on training molecules is
+  similar (with formula: 11.6% / 38.4% / 47.6% at K=1/10/100; their formulas
+  have more isomers, so they are slightly harder). Validation loss was still
+  falling slowly at epoch 45. The 9.65M-parameter GPU run should help.
+- **There is a large gap to the library reference** (91% top-1 with the
+  formula). The library contains the answer, with exact constants, while the
+  model has to generate it. Physics re-ranking (milestone 5) is the obvious
+  next step: compute constants for the ~100 proposed candidates and re-rank by
+  fit. With accurate enough constants, top-1 recall could approach the 52% of
+  cases where the right structure is proposed. GFN2-xTB alone is too coarse
+  for that (milestone 2: 6.8% tolerance), so this needs DFT or a DFT-quality
+  surrogate.
+
+### CPU pilot (1.4M parameters, 12 epochs)
+
+The first end-to-end check (d=128, 3+3 layers, 49 min, 400 test molecules,
+`results/m3_pilot/`) did not use the constants. With the formula it reached
+1.0% / 5.8% / 11.0% at K=1/10/100, no better than random isomers (0.9% / 4.4%
+/ 27.6%). Without the formula it reached 0% at every K. Train and test recall
+were the same, so it was underfitting. Going from 1.4M parameters and 12 epochs
+to 3.8M and 45 epochs took recall@10 with formula from 5.8% to 43%.
 
 ## Reproduce
 
@@ -215,6 +240,11 @@ python scripts/03b_analyze_cheap_methods.py   # milestone 2 tables, figure, link
 python scripts/04_build_m3_dataset.py         # ~2 min: data/processed/m3/
 python scripts/05_train_m3.py --config configs/m3_baseline.json --out runs/m3_baseline   # GPU
 python scripts/06_eval_m3.py --run runs/m3_baseline --n-eval 2000 --samples 1000
+# CPU run: repeat until all 45 epochs are done (each call stops cleanly after ~100 min)
+python scripts/05_train_m3.py --config configs/m3_cpu_medium.json --out runs/m3_cpu_medium --resume --time-budget-min 100
+python scripts/06_eval_m3.py --run runs/m3_cpu_medium --n-eval 500 --noise 0.005 --samples 100   # ~9 min per condition
+python scripts/06_eval_m3.py --run runs/m3_cpu_medium --n-eval 500 --noise 0.005 --conditions "ABC + formula" --decoy-constants
+python scripts/06b_plot_m3.py --results results/m3_cpu_medium   # after copying eval summaries there
 pytest
 ```
 
@@ -247,9 +277,9 @@ src/rotml/
   ml/metrics.py                  recall@K, library-lookup reference
   plotting.py                    figure style
 scripts/                         numbered pipeline steps
-configs/                         training configs (baseline, CPU pilot, tiny smoke test)
+configs/                         training configs (GPU baseline, CPU medium, CPU pilot, tiny smoke test)
 notebooks/m3_train_colab.ipynb   GPU training on Google Colab
-results/m1, results/m2           summary tables and figures (large per-molecule files are gitignored)
+results/m1, m2, m3_*             summary tables and figures (large per-molecule files are gitignored)
 tests/                           unit tests
 docs/research_plan.md            plan, pipeline, prior work
 ```
