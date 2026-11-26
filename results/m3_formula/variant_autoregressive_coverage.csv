@@ -1,0 +1,5 @@
+split,dipole,n,nll,coverage@1,coverage@5,coverage@10,coverage@20,coverage@50
+val,False,6390,8.534,0,0,0,0,0.05915
+val,True,6390,8.126,0,0,0,0.0001565,0.09139
+test,False,13020,8.677,0,7.68e-05,7.68e-05,0.002151,0.04931
+test,True,13020,8.271,0,0.0001536,0.003533,0.01075,0.1038

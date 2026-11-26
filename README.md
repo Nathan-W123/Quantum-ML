@@ -15,9 +15,9 @@ pipeline design and the closest prior work.
 |---|---|
 | 1. Identifiability of QM9 molecules from rotational constants | done |
 | 2. Error of cheap geometry methods (MMFF94, GFN2-xTB) vs DFT | done |
-| 3. Baseline inverse model (constants -> SELFIES transformer) | 3.8M-parameter CPU run done: with the formula, 43% top-10 recall on unseen formulas (random isomers: 4.4%); without it, 3%. Full 9.65M-parameter run needs a GPU |
+| 3. Baseline inverse model (constants -> SELFIES transformer) | 3.8M-parameter CPU run done: with the formula, 43% top-10 recall on unseen formulas (random isomers: 4.4%). Without it, 2-3%; proposing formulas first lifts top-100 recall from 2% to 6%. Full 9.65M-parameter run needs a GPU |
 | 4. KREED baseline and ablations | planned |
-| 5. Full propose -> verify -> rank pipeline | planned |
+| 5. Full propose -> verify -> rank pipeline | first prototype: GFN2-xTB re-ranking of the top 30 candidates lifts top-1 recall from 11% to 26.5% (formula given) |
 
 ## Milestone 1: how much do rotational constants pin down a molecule?
 
@@ -217,6 +217,109 @@ The first end-to-end check (d=128, 3+3 layers, 49 min, 400 test molecules,
 were the same, so it was underfitting. Going from 1.4M parameters and 12 epochs
 to 3.8M and 45 epochs took recall@10 with formula from 5.8% to 43%.
 
+### Without the formula: propose formulas first
+
+The structure model rarely writes a formula it has never seen. So a small
+separate model predicts the formula from A, B, C
+(`src/rotml/ml/formula.py`, `scripts/08_train_formula_model.py`). The
+structure model is then run once for each of its top 20 formulas
+(`scripts/09_eval_formula_proposals.py`), and the pooled candidates are ranked
+by log p(formula) + log p(structure | formula).
+
+**Formula model** on test molecules (formulas never seen in training), 0.5%
+noise (`results/m3_formula/`). Each cell is how often the true formula is
+among the top K proposals:
+
+| Inputs | Top 1 | Top 10 | Top 20 | Top 50 |
+|---|---|---|---|---|
+| A, B, C | 0% | 2.5% | 22% | 47% |
+| A, B, C + dipole | 0% | 4.2% | 21% | 52% |
+
+**Structure recall without the formula**, on the same 200 test molecules:
+
+| Method | @1 | @10 | @50 | @100 |
+|---|---|---|---|---|
+| Structure model alone | 0% | 1.0% | 2.0% | 2.0% |
+| Structure model on the top 20 proposed formulas | 0% | 0.5% | 4.5% | 6.0% |
+
+Findings:
+
+- **Proposing formulas first triples recall at K=100, but it stays low.**
+  The formula is the bottleneck. The true formula is in the top 20 proposals
+  for only 23.5% of molecules. When it is there, the structure is found 23% of
+  the time.
+- **Predicting an unseen formula from A, B, C is hard, for two reasons.**
+  The constants measure how mass is spread out, and C, N and O have similar
+  masses (12, 14, 16), so many formulas give similar constants. Also, every
+  test formula is missing from training. A model that predicts element counts
+  one after another memorizes the training formulas: it gets the true formula
+  into its top 50 less than 6% of the time. Predicting each element count
+  independently generalizes much better (47%) but is imprecise. Training with
+  more noise did not help.
+- Ways forward: train on a much larger chemical space (so fewer formulas are
+  truly new), model p(constants | formula) instead of p(formula | constants),
+  or generate across many formulas and let physics decide (milestone 5).
+
+## Milestone 5 (first prototype): re-ranking candidates with physics
+
+For 200 test molecules (formula given, 0.5% noise), each of the model's top
+30 candidates was checked with physics (`scripts/07_physics_rerank.py`,
+`src/rotml/analysis/rerank.py`):
+
+1. Enumerate stereoisomers, keeping one per mirror-image pair (enantiomers
+   have identical constants).
+2. Embed ETKDG conformers, relax them with MMFF94 and then GFN2-xTB, and
+   compute A, B, C for each conformer.
+3. Score the candidate by its best-matching conformer, after removing
+   GFN2-xTB's known bias (milestone 2).
+
+Candidates were ranked by fit alone, or by fit plus the model's
+log-probability. The combination uses a heavy-tailed (Student-t) likelihood
+whose scale comes from milestone 2, fixed before looking at test results.
+Results are in `results/m5_rerank/`.
+
+| Ranking | Right structure first | Top 5 | Top 10 |
+|---|---|---|---|
+| Model alone | 11.0% | 30.5% | 44.0% |
+| MMFF94 fit | 17.5% | 33.5% | 39.5% |
+| Model + MMFF94 | 19.5% | 38.5% | 44.0% |
+| GFN2-xTB fit | 26.0% | 40.5% | 44.5% |
+| **Model + GFN2-xTB** | **26.5%** | **43.0%** | **45.5%** |
+| Exact DFT constants (oracle) | 47.0% | 50.0% | 50.5% |
+| Ceiling: right structure among the 30 candidates | 50.5% | 50.5% | 50.5% |
+
+![Top-1 recall by ranking](results/m5_rerank/top1_by_ranking.png)
+
+Findings:
+
+- **Physics re-ranking more than doubles top-1 recall**, from 11% to 26.5%
+  (+15.5 points, bootstrap 95% CI 9.5 to 21). For molecules whose formula
+  the model has never seen, the right structure is now ranked first about a
+  quarter of the time.
+- **It is cheap.** GFN2-xTB took about 1 CPU-minute per molecule for 30
+  candidates. MMFF94 alone gives less than half the gain.
+- **The method's accuracy is the main remaining loss.** With exact DFT
+  constants for the candidates, top-1 recall would reach 47%, close to the
+  50.5% ceiling. The right structure was proposed but not ranked first by
+  model + GFN2-xTB in 48 molecules:
+  - 28: a wrong candidate fit better within GFN2-xTB's accuracy (look-alikes,
+    as in milestone 1).
+  - 15: the right structure's computed constants were off by more than 3%
+    (wrong conformer or method error).
+  - 5: no geometry could be made.
+
+  The right structure's error has a median of 1.05% but a 90th percentile of
+  11%.
+- **Next steps are clear.** Get more accurate constants for the candidates,
+  either from DFT on the few survivors or from a GNN trained to correct cheap
+  geometries to DFT quality. Use a proper conformer search (CREST) for
+  flexible candidates. And raise the ceiling with a stronger proposal model
+  (the GPU run).
+
+Caveat: the oracle can only score candidates that are QM9 molecules (59% of
+them); the rest rank last. Since the right answer is always a QM9 molecule,
+47% is an optimistic bound.
+
 ## Reproduce
 
 ```bash
@@ -245,6 +348,10 @@ python scripts/05_train_m3.py --config configs/m3_cpu_medium.json --out runs/m3_
 python scripts/06_eval_m3.py --run runs/m3_cpu_medium --n-eval 500 --noise 0.005 --samples 100   # ~9 min per condition
 python scripts/06_eval_m3.py --run runs/m3_cpu_medium --n-eval 500 --noise 0.005 --conditions "ABC + formula" --decoy-constants
 python scripts/06b_plot_m3.py --results results/m3_cpu_medium   # after copying eval summaries there
+python scripts/07_physics_rerank.py --run runs/m3_cpu_medium --out runs/m3_rerank --n 200 --top 30 --time-budget-min 100   # ~1 h on 4 cores; re-run to resume
+python scripts/07b_plot_rerank.py --results results/m5_rerank   # after copying summary.csv there
+python scripts/08_train_formula_model.py --out runs/formula --threads 1   # ~4 min
+python scripts/09_eval_formula_proposals.py --run runs/m3_cpu_medium --formula-model runs/formula/model.pt --n-eval 200 --top-formulas 20
 pytest
 ```
 
@@ -269,17 +376,19 @@ src/rotml/
   data/qm9.py                    QM9 SDF + CSV loader
   analysis/identifiability.py    k-d tree match counting (milestone 1)
   analysis/cheap_methods.py      MMFF94 / GFN2-xTB / conformer search (milestone 2)
+  analysis/rerank.py             physics re-ranking of proposed candidates (milestone 5)
   ml/features.py                 observable slots, noise, condition masks (milestone 3)
   ml/tokens.py                   SELFIES vocabulary and canonical comparison
   ml/dataset.py                  formula-split dataset build and batching
   ml/model.py                    encoder-decoder transformer
   ml/decode.py                   beam search, sampling, candidate ranking
   ml/metrics.py                  recall@K, library-lookup reference
+  ml/formula.py                  formula proposals from rotational constants
   plotting.py                    figure style
 scripts/                         numbered pipeline steps
 configs/                         training configs (GPU baseline, CPU medium, CPU pilot, tiny smoke test)
 notebooks/m3_train_colab.ipynb   GPU training on Google Colab
-results/m1, m2, m3_*             summary tables and figures (large per-molecule files are gitignored)
+results/m1, m2, m3_*, m5_*       summary tables and figures (large per-molecule files are gitignored)
 tests/                           unit tests
 docs/research_plan.md            plan, pipeline, prior work
 ```

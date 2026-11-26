@@ -52,10 +52,14 @@ moment-of-inertia guidance come after the supervised baseline.
 3. **Baseline inverse model** - constants -> SELFIES transformer, formula split, recall@K, with/without formula; compare to rotconML.
    A 3.8M-parameter CPU run (`results/m3_cpu_medium`) reaches 43% top-10 recall on unseen formulas when
    given the formula (random isomers: 4.4%), and a decoy-constants control confirms it uses the constants.
-   Without the formula: 3% top-10, because it rarely produces an unseen formula.
+   Without the formula: 3% top-10, because it rarely produces an unseen formula. A separate formula
+   model (`results/m3_formula`) helps only a little (top-100 recall 2% -> 6%): unseen formulas are hard
+   to infer from A, B, C.
    The 9.65M-parameter run needs a GPU (`notebooks/m3_train_colab.ipynb`).
 4. **KREED baseline** - reproduce on QM9, retrain with fewer/no isotopologue coordinates. (Removing the formula requires changing the model: that is the research contribution.)
 5. **Full pipeline** - transformer proposals -> physics scoring -> calibrated ranking; test on experimental CDMS/JPL constants.
+   First prototype (`results/m5_rerank`): GFN2-xTB re-ranking of the top 30 candidates lifts top-1 recall
+   from 11% to 26.5% (formula given); exact DFT constants would give 47%, against a 50.5% ceiling.
 
 Then: astro chemical space (radicals, ions, carbon chains), raw line lists,
 line grouping, retrospective rediscovery of detected interstellar molecules.
