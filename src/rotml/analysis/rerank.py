@@ -22,6 +22,7 @@ import time
 
 import numpy as np
 from rdkit import Chem
+from rdkit.Chem import rdMolDescriptors
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 
 from rotml.analysis.cheap_methods import etkdg_conformers, mmff_relax, unique_geometries, xtb_relax
@@ -33,11 +34,19 @@ XTB_BIAS = np.array([0.0113, 0.0158, 0.0166])
 XTB_SIGMA = 0.014
 
 
-def diastereomers(mol: Chem.Mol, max_isomers: int = 8, seed: int = 42) -> list[Chem.Mol]:
-    """Stereoisomers of mol with one representative per enantiomer pair."""
-    opts = StereoEnumerationOptions(onlyUnassigned=True, unique=True, tryEmbedding=False)
+def diastereomers(mol: Chem.Mol, max_isomers: int = 8, seed: int = 42,
+                  try_embedding: bool = False) -> list[Chem.Mol]:
+    """Stereoisomers of mol with one representative per enantiomer pair.
+
+    try_embedding keeps only stereoisomers RDKit can embed in 3D: in strained
+    cages most diastereomers are impossible, and sampling among them misses
+    the feasible ones.
+    """
+    opts = StereoEnumerationOptions(onlyUnassigned=True, unique=True, tryEmbedding=try_embedding)
     kept: dict[str, Chem.Mol] = {}
     for iso in EnumerateStereoisomers(mol, options=opts):
+        iso = Chem.Mol(iso)
+        iso.RemoveAllConformers()  # a 3D conformer (from tryEmbedding) would override the chiral tags
         smi = Chem.MolToSmiles(iso)
         mirror = Chem.Mol(iso)
         for atom in mirror.GetAtoms():
@@ -52,27 +61,47 @@ def diastereomers(mol: Chem.Mol, max_isomers: int = 8, seed: int = 42) -> list[C
 
 
 def candidate_constants(smiles: str, n_conformers: int = 10, max_isomers: int = 8,
-                        seed: int = 42, use_xtb: bool = True) -> dict:
+                        seed: int = 42, use_xtb: bool = True, keep_geometries: bool = False,
+                        adaptive: bool = False) -> dict:
     """Rotational constants (GHz) of a candidate's relaxed conformers.
 
     Returns {"smiles", "status", "n_isomers", "mmff": [[A, B, C, E], ...],
     "xtb": [[A, B, C, E], ...], "seconds"}. Energies are per isomer, so they
-    are only comparable within one stereoisomer.
+    are only comparable within one stereoisomer. With keep_geometries, also
+    "symbols" and "xtb_xyz" (one coordinate list per "xtb" row; every
+    stereoisomer has the same atom order).
+
+    adaptive=True is a wider search for hard cases: only stereoisomers that can
+    be embedded (all of them if none can), up to 16 of them; 10 + 5 conformers
+    per rotatable bond (up to 30), half of them embedded permissively
+    (random coordinates, no torsion preferences) for rotamer diversity and
+    strained cages.
     """
     t0 = time.perf_counter()
     out = {"smiles": smiles, "status": "ok", "n_isomers": 0, "mmff": [], "xtb": []}
+    if keep_geometries:
+        out["xtb_xyz"] = []
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         out["status"] = "bad_smiles"
         return out
-    isomers = diastereomers(mol, max_isomers, seed)
+    if adaptive:
+        n_conformers = min(30, 10 + 5 * rdMolDescriptors.CalcNumRotatableBonds(mol))
+        max_isomers = max(max_isomers, 16)
+        isomers = (diastereomers(mol, max_isomers, seed, try_embedding=True)
+                   or diastereomers(mol, max_isomers, seed))
+    else:
+        isomers = diastereomers(mol, max_isomers, seed)
     out["n_isomers"] = len(isomers)
-    k = max(2, math.ceil(n_conformers / len(isomers)))
+    k = max(3 if adaptive else 2, math.ceil(n_conformers / len(isomers)))
     for iso in isomers:
         molh = Chem.AddHs(iso)
         symbols = [a.GetSymbol() for a in molh.GetAtoms()]
         masses = masses_for(symbols)
-        if not etkdg_conformers(molh, k, seed):
+        etkdg_conformers(molh, k, seed)
+        if adaptive:
+            etkdg_conformers(molh, k, seed + 1, permissive=True, keep_existing=True)
+        if molh.GetNumConformers() == 0:
             continue
         geoms = [mmff_relax(molh, cid) for cid in range(molh.GetNumConformers())]
         with np.errstate(divide="ignore", invalid="ignore"):  # linear geometries have A = 0
@@ -83,6 +112,9 @@ def candidate_constants(smiles: str, n_conformers: int = 10, max_isomers: int = 
                 x = xtb_relax(symbols, g.coords)
                 if x is not None:
                     out["xtb"].append([*rotational_constants(x.coords, masses), x.energy])
+                    if keep_geometries:
+                        out["symbols"] = symbols
+                        out["xtb_xyz"].append(np.round(x.coords, 5).tolist())
     if not out["mmff"]:
         out["status"] = "no_embedding"
     elif use_xtb and not out["xtb"]:

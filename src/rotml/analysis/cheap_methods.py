@@ -64,7 +64,8 @@ def xtb_relax(symbols: list[str], coords: np.ndarray, charge: int = 0) -> Geomet
         return None
 
 
-def etkdg_conformers(mol: Chem.Mol, k: int, seed: int) -> list[int]:
+def etkdg_conformers(mol: Chem.Mol, k: int, seed: int, permissive: bool = False,
+                     keep_existing: bool = False) -> list[int]:
     """Embed k conformers from the graph alone (QM9 coordinates discarded).
 
     No RMSD pruning at embedding time: duplicates are removed after
@@ -72,12 +73,26 @@ def etkdg_conformers(mol: Chem.Mol, k: int, seed: int) -> list[int]:
 
     Note: RDKit gives k *identical* conformers when randomSeed == 0, so the
     seed must be non-zero.
+
+    permissive=True embeds from random coordinates without ETKDG's torsion
+    preferences and tolerates smoothing failures: it embeds some strained
+    cages that standard ETKDG cannot, and samples rotamers that the torsion
+    preferences suppress. keep_existing adds to the molecule's conformers
+    instead of replacing them.
     """
     if seed == 0:
         raise ValueError("randomSeed=0 makes RDKit embed identical conformers; use a non-zero seed")
     params = AllChem.ETKDGv3()
     params.randomSeed = seed
-    mol.RemoveAllConformers()
+    if permissive:
+        params.useRandomCoords = True
+        params.ignoreSmoothingFailures = True
+        params.useExpTorsionAnglePrefs = False
+        params.useBasicKnowledge = False
+    if keep_existing:
+        params.clearConfs = False
+    else:
+        mol.RemoveAllConformers()
     return list(AllChem.EmbedMultipleConfs(mol, numConfs=k, params=params))
 
 

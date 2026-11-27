@@ -19,6 +19,8 @@ Stages, each resumable (re-run the same command to continue):
      xtb fit          GFN2-xTB fit to the observed constants alone
      model + xtb      log-probability + Student-t log-likelihood of the xTB fit
      mmff fit / model + mmff   the same with MMFF94 (100x cheaper, 2x less accurate)
+     gnn fit / model + gnn     the same with GFN2-xTB geometries corrected toward DFT by the
+                               geometry corrector (--corrector; needs --keep-geometries)
      DFT lookup (oracle)       candidates that are QM9 molecules, ranked by their
                                DFT constants: what exact physics with a known
                                conformer would do. Candidates outside QM9 rank last.
@@ -89,15 +91,17 @@ def stage_candidates(args, path: Path) -> list[dict]:
     return rows
 
 
-def _work(smiles: str) -> dict:
+def _work(job: tuple) -> dict:
+    smiles, keep_geometries, *rest = job
+    adaptive = bool(rest and rest[0])
     try:
-        return candidate_constants(smiles)
+        return candidate_constants(smiles, keep_geometries=keep_geometries, adaptive=adaptive)
     except Exception as exc:  # noqa: BLE001 - keep the pool alive on odd molecules
         return {"smiles": smiles, "status": f"error: {type(exc).__name__}", "mmff": [], "xtb": []}
 
 
 def stage_physics(rows: list[dict], path: Path, workers: int, budget_s: float, t_start: float,
-                  top: int) -> bool:
+                  top: int, keep_geometries: bool = False, adaptive: bool = False) -> bool:
     done = set()
     if path.exists():
         done = {json.loads(line)["smiles"] for line in path.read_text().splitlines() if line.strip()}
@@ -107,7 +111,8 @@ def stage_physics(rows: list[dict], path: Path, workers: int, budget_s: float, t
     if not todo:
         return True
     with mp.get_context("spawn").Pool(workers) as pool, path.open("a") as fh:
-        for n, res in enumerate(pool.imap_unordered(_work, todo, chunksize=1), 1):
+        jobs = [(smi, keep_geometries, adaptive) for smi in todo]
+        for n, res in enumerate(pool.imap_unordered(_work, jobs, chunksize=1), 1):
             fh.write(json.dumps(res) + "\n")
             fh.flush()
             if n % 200 == 0 or n == len(todo):
@@ -127,13 +132,56 @@ def rank_of(target: str, smiles: list[str], score: np.ndarray) -> float:
     return float(np.where(np.array(smiles)[order] == target)[0][0] + 1)
 
 
+def corrected_constants(phys: dict, corrector_path: Path) -> tuple[dict, float]:
+    """GNN-corrected A, B, C for every stored xTB geometry, and the scoring scale sigma.
+
+    sigma is fixed from validation data, not test results: the corrector's
+    same-conformer validation spread, times 1.28 (the ratio of searched- to
+    same-conformer spread for GFN2-xTB in milestone 2).
+    """
+    import torch
+
+    from rotml.ml.corrector import Z_OF_SYMBOL, GeometryCorrector, log_constants, masses
+
+    ckpt = torch.load(corrector_path, map_location="cpu", weights_only=False)
+    model = GeometryCorrector(**ckpt["config"])
+    model.load_state_dict(ckpt["model"])
+    model.eval()
+    metrics = pd.read_csv(corrector_path.parent / "metrics.csv")
+    val_sd = metrics.query("split == 'val' and method == 'GNN-corrected'").robust_sd_per_constant_pct.item() / 100
+    keys, zs, xs = [], [], []
+    for smi, r in phys.items():
+        for k, xyz in enumerate(r.get("xtb_xyz", [])):
+            keys.append((smi, k))
+            zs.append([Z_OF_SYMBOL[a] for a in r["symbols"]])
+            xs.append(xyz)
+    out: dict[str, list] = {}
+    with torch.no_grad():
+        for s in range(0, len(keys), 512):
+            n = max(len(z) for z in zs[s:s + 512])
+            z = torch.zeros(len(zs[s:s + 512]), n, dtype=torch.long)
+            x = torch.zeros(len(zs[s:s + 512]), n, 3)
+            for i, (zi, xi) in enumerate(zip(zs[s:s + 512], xs[s:s + 512])):
+                z[i, :len(zi)] = torch.tensor(zi)
+                x[i, :len(zi)] = torch.tensor(xi)
+            abc = torch.exp(log_constants(model(z, x), masses(z))).numpy()
+            for (smi, _), a in zip(keys[s:s + 512], abc):
+                out.setdefault(smi, []).append(a.tolist())
+    return out, 1.28 * val_sd
+
+
 def stage_rank(rows: list[dict], physics_path: Path, data_dir: Path, noise: float, out: Path,
-               top: int) -> None:
+               top: int, corrector: Path | None = None, summary_name: str = "summary.csv") -> None:
     phys = {}
     for line in physics_path.read_text().splitlines():
         if line.strip():
             r = json.loads(line)
             phys[r["smiles"]] = r
+    gnn, sig_gnn = corrected_constants(phys, corrector) if corrector else ({}, math.nan)
+    if corrector:
+        print(f"corrected {sum(map(len, gnn.values()))} geometries; GNN scoring sigma "
+              f"{100 * sig_gnn:.2f}% per constant", flush=True)
+        sig_gnn = math.hypot(sig_gnn, noise)
     # DFT constants of every QM9 molecule in the dataset, by stereo-free canonical SMILES.
     mols = pd.read_csv(data_dir / "m3_molecules.csv")
     abc_all = np.load(data_dir / "m3_dataset.npz")["abc"]
@@ -159,8 +207,12 @@ def stage_rank(rows: list[dict], physics_path: Path, data_dir: Path, noise: floa
             "model + xtb": logp + xtb_ll,
             "mmff fit": -mmff_err,
             "model + mmff": logp + mmff_ll,
-            "DFT lookup (oracle)": -dft_err,
         }
+        if corrector:
+            gnn_err = np.array([fit_sq_error(gnn.get(s, []), obs) for s in smiles])
+            scores["gnn fit"] = -gnn_err
+            scores["model + gnn"] = logp + np.array([physics_loglik(e, sig_gnn) for e in gnn_err])
+        scores["DFT lookup (oracle)"] = -dft_err
         t = r["target"]
         row = {"mol_index": r["mol_index"], "target": t, "formula": r["formula"],
                "n_candidates": len(smiles), "in_candidates": t in smiles}
@@ -168,6 +220,9 @@ def stage_rank(rows: list[dict], physics_path: Path, data_dir: Path, noise: floa
             k = smiles.index(t)
             row["true_xtb_rms_err_pct"] = 100 * math.sqrt(xtb_err[k] / 3) if math.isfinite(xtb_err[k]) else math.inf
             row["true_xtb_status"] = phys[t]["status"]
+            if corrector:
+                row["true_gnn_rms_err_pct"] = (100 * math.sqrt(gnn_err[k] / 3) if math.isfinite(gnn_err[k])
+                                               else math.inf)
         row |= {f"rank {name}": rank_of(t, smiles, s) for name, s in scores.items()}
         per_mol.append(row)
         stats["candidates"].append(len(smiles))
@@ -176,14 +231,14 @@ def stage_rank(rows: list[dict], physics_path: Path, data_dir: Path, noise: floa
         stats["seconds"].append(sum(phys[s].get("seconds", 0.0) for s in smiles))
 
     pm = pd.DataFrame(per_mol)
-    pm.to_csv(out / "per_molecule.csv", index=False, float_format="%.4g")
+    pm.to_csv(out / summary_name.replace("summary", "per_molecule"), index=False, float_format="%.4g")
     names = [c.removeprefix("rank ") for c in pm.columns if c.startswith("rank ")]
     summary = [{"ranking": "in candidates (ceiling)", **{f"recall@{k}": pm.in_candidates.mean() for k in KS}}]
     summary += [{"ranking": n, **{f"recall@{k}": float((pm[f"rank {n}"] <= k).mean()) for k in KS}}
                 for n in names]
     s = pd.DataFrame(summary)
     s.insert(1, "n", len(pm))
-    s.to_csv(out / "summary.csv", index=False, float_format="%.4g")
+    s.to_csv(out / summary_name, index=False, float_format="%.4g")
     print(s.to_string(index=False, float_format=lambda v: f"{v:.3f}"))
     print(f"mean candidates {np.mean(stats['candidates']):.1f}; with xTB constants "
           f"{100 * np.mean(stats['xtb_ok']):.1f}%; candidates that are QM9 molecules "
@@ -203,6 +258,14 @@ def main() -> None:
     ap.add_argument("--samples", type=int, default=100)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--top", type=int, default=30, help="physics for each molecule's top-N model candidates")
+    ap.add_argument("--cache", default="physics.jsonl", help="physics cache file name inside --out")
+    ap.add_argument("--corrector", type=Path, default=None,
+                    help="geometry corrector checkpoint (scripts/11_train_corrector.py)")
+    ap.add_argument("--summary-name", default="summary.csv")
+    ap.add_argument("--adaptive-search", action="store_true",
+                    help="wider conformer/stereoisomer search (use a separate --cache)")
+    ap.add_argument("--keep-geometries", action="store_true",
+                    help="also store GFN2-xTB coordinates (needed for the geometry corrector)")
     ap.add_argument("--time-budget-min", type=float, default=float("inf"))
     args = ap.parse_args()
     t_start = time.time()
@@ -211,13 +274,14 @@ def main() -> None:
     rows = stage_candidates(args, args.out / "candidates.json")
     if len(rows) != args.n:
         raise SystemExit(f"{args.out}/candidates.json has {len(rows)} molecules, not --n {args.n}")
-    if not stage_physics(rows, args.out / "physics.jsonl", args.workers,
-                         args.time_budget_min * 60, t_start, args.top):
+    if not stage_physics(rows, args.out / args.cache, args.workers,
+                         args.time_budget_min * 60, t_start, args.top, args.keep_geometries,
+                         args.adaptive_search):
         return
     import torch
     ckpt = torch.load(args.run / "best.pt", map_location="cpu", weights_only=False)
-    stage_rank(rows, args.out / "physics.jsonl", Path(ckpt["train_config"]["data_dir"]), args.noise,
-               args.out, args.top)
+    stage_rank(rows, args.out / args.cache, Path(ckpt["train_config"]["data_dir"]), args.noise,
+               args.out, args.top, args.corrector, args.summary_name)
 
 
 if __name__ == "__main__":

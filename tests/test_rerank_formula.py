@@ -78,3 +78,45 @@ def test_formula_net_learns_and_proposes_valid_formulas(autoregressive):
     assert [p[0][0] for p in props] == [(6, 6, 0, 1, 0), (4, 4, 2, 0, 0)]
     assert all(is_valid_formula(c) for p in props for c, _ in p)
     assert all(p[i][1] >= p[i + 1][1] for p in props for i in range(len(p) - 1))
+
+
+def test_corrector_is_equivariant_and_starts_at_identity():
+    from rotml.ml.corrector import GeometryCorrector, corrector_loss, log_constants, masses
+    from rotml.physics.rotor import masses_for, rotational_constants
+
+    torch.manual_seed(0)
+    z = torch.tensor([[6, 8, 1, 1, 0], [6, 6, 1, 1, 1]])
+    x = torch.randn(2, 5, 3)
+    ref = rotational_constants(x[1].numpy().astype(float), masses_for(["C", "C", "H", "H", "H"]))
+    assert np.allclose(np.exp(log_constants(x[1:2], masses(z[1:2])).numpy()[0]), ref, rtol=1e-6)
+
+    net = GeometryCorrector(d=16, n_layers=1, n_rbf=8)
+    assert torch.allclose(net(z, x), x)  # zero-initialised last layer: no correction yet
+    for p in net.coord[-1].parameters():
+        torch.nn.init.normal_(p, std=0.1)
+    q, _ = torch.linalg.qr(torch.randn(3, 3))
+    t = torch.randn(1, 1, 3)
+    y, y2 = net(z, x), net(z, x @ q.T + t)
+    real = z > 0
+    assert torch.allclose(y2[real], (y @ q.T + t)[real], atol=1e-5)
+    assert torch.allclose(log_constants(y, masses(z)), log_constants(y2, masses(z)), atol=1e-6)
+    loss, _, _ = corrector_loss(net, z, x, x, torch.exp(log_constants(x, masses(z))))
+    loss.backward()
+
+
+def test_diastereomers_with_embedding_filter_merges_enantiomers():
+    from rdkit import Chem
+    # Strained cage: 20 diastereomers on paper, only 4 (all meso) can be embedded in 3D.
+    mol = Chem.MolFromSmiles("C1C2C1C1OC2C2OC12")
+    assert len(diastereomers(mol, max_isomers=100)) == 20
+    assert len(diastereomers(mol, max_isomers=100, try_embedding=True)) == 4
+    # With the embedding filter, chiral isomers are still merged with their mirror images.
+    assert len(diastereomers(Chem.MolFromSmiles("CC(O)C(C)O"), try_embedding=True)) == 2
+
+
+def test_adaptive_search_embeds_strained_cage_and_finds_rotamers():
+    out = candidate_constants("c1cc2n(c1)C1CN2C1", use_xtb=False)
+    assert out["status"] == "no_embedding"
+    assert candidate_constants("c1cc2n(c1)C1CN2C1", use_xtb=False, adaptive=True)["status"] == "ok"
+    # Both planar rotamers of 2-fluorobenzaldehyde.
+    assert len(candidate_constants("O=Cc1ccccc1F", use_xtb=False, adaptive=True)["mmff"]) == 2
