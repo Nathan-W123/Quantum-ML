@@ -120,3 +120,19 @@ def test_adaptive_search_embeds_strained_cage_and_finds_rotamers():
     assert candidate_constants("c1cc2n(c1)C1CN2C1", use_xtb=False, adaptive=True)["status"] == "ok"
     # Both planar rotamers of 2-fluorobenzaldehyde.
     assert len(candidate_constants("O=Cc1ccccc1F", use_xtb=False, adaptive=True)["mmff"]) == 2
+
+
+def test_adaptive_isomers_include_default_isomers():
+    from rdkit import Chem
+    from rotml.analysis.rerank import enantiomer_pair_key, search_isomers
+    # RDKit's embedding test keeps only 1 of these 4 diastereomers, and not the
+    # one in QM9; the adaptive search must still try all 4.
+    for smi in ("C#CC12CC(C=O)C1O2", "CC1(O)C(O)C2OC21", "C1C2C1C1OC2C2OC12"):
+        mol = Chem.MolFromSmiles(smi)
+        default = {enantiomer_pair_key(m) for m in search_isomers(mol)}
+        adaptive = {enantiomer_pair_key(m) for m in search_isomers(mol, adaptive=True)}
+        assert default <= adaptive and len(adaptive) <= max(16, len(default))
+    # Cage with 20 diastereomers: the 4 embeddable ones are added to the 8 sampled.
+    cage = Chem.MolFromSmiles("C1C2C1C1OC2C2OC12")
+    embeddable = {enantiomer_pair_key(m) for m in diastereomers(cage, 100, try_embedding=True)}
+    assert embeddable <= {enantiomer_pair_key(m) for m in search_isomers(cage, adaptive=True)}

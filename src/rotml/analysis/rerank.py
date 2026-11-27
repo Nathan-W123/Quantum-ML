@@ -34,25 +34,47 @@ XTB_BIAS = np.array([0.0113, 0.0158, 0.0166])
 XTB_SIGMA = 0.014
 
 
+def enantiomer_pair_key(iso: Chem.Mol) -> str:
+    """The same string for a stereoisomer and its mirror image."""
+    mirror = Chem.Mol(iso)
+    for atom in mirror.GetAtoms():
+        atom.InvertChirality()
+    return min(Chem.MolToSmiles(iso), Chem.MolToSmiles(mirror))
+
+
+def search_isomers(mol: Chem.Mol, max_isomers: int = 8, seed: int = 42,
+                   adaptive: bool = False) -> list[Chem.Mol]:
+    """Stereoisomers to search for one candidate.
+
+    Default: up to max_isomers diastereomers. adaptive: the same ones plus
+    stereoisomers RDKit can embed, up to 16 in total, so the wider search
+    never drops an isomer the default search would have tried.
+    """
+    isomers = {enantiomer_pair_key(m): m for m in diastereomers(mol, max_isomers, seed)}
+    if adaptive:
+        cap = max(16, len(isomers))
+        for iso in diastereomers(mol, cap, seed, try_embedding=True):
+            if len(isomers) >= cap:
+                break
+            isomers.setdefault(enantiomer_pair_key(iso), iso)
+    return list(isomers.values())
+
+
 def diastereomers(mol: Chem.Mol, max_isomers: int = 8, seed: int = 42,
                   try_embedding: bool = False) -> list[Chem.Mol]:
     """Stereoisomers of mol with one representative per enantiomer pair.
 
     try_embedding keeps only stereoisomers RDKit can embed in 3D: in strained
     cages most diastereomers are impossible, and sampling among them misses
-    the feasible ones.
+    the feasible ones. RDKit's test is a single embedding attempt, so it can
+    also drop feasible isomers; use it to add isomers, not to filter them.
     """
     opts = StereoEnumerationOptions(onlyUnassigned=True, unique=True, tryEmbedding=try_embedding)
     kept: dict[str, Chem.Mol] = {}
     for iso in EnumerateStereoisomers(mol, options=opts):
         iso = Chem.Mol(iso)
         iso.RemoveAllConformers()  # a 3D conformer (from tryEmbedding) would override the chiral tags
-        smi = Chem.MolToSmiles(iso)
-        mirror = Chem.Mol(iso)
-        for atom in mirror.GetAtoms():
-            atom.InvertChirality()
-        key = min(smi, Chem.MolToSmiles(mirror))
-        kept.setdefault(key, iso)
+        kept.setdefault(enantiomer_pair_key(iso), iso)
     isomers = [kept[k] for k in sorted(kept)]
     if len(isomers) > max_isomers:
         rng = np.random.default_rng(seed)
@@ -71,8 +93,8 @@ def candidate_constants(smiles: str, n_conformers: int = 10, max_isomers: int = 
     "symbols" and "xtb_xyz" (one coordinate list per "xtb" row; every
     stereoisomer has the same atom order).
 
-    adaptive=True is a wider search for hard cases: only stereoisomers that can
-    be embedded (all of them if none can), up to 16 of them; 10 + 5 conformers
+    adaptive=True is a wider search for hard cases: the default stereoisomers
+    plus ones RDKit can embed, up to 16 in total (search_isomers); 10 + 5 conformers
     per rotatable bond (up to 30), half of them embedded permissively
     (random coordinates, no torsion preferences) for rotamer diversity and
     strained cages.
@@ -87,11 +109,7 @@ def candidate_constants(smiles: str, n_conformers: int = 10, max_isomers: int = 
         return out
     if adaptive:
         n_conformers = min(30, 10 + 5 * rdMolDescriptors.CalcNumRotatableBonds(mol))
-        max_isomers = max(max_isomers, 16)
-        isomers = (diastereomers(mol, max_isomers, seed, try_embedding=True)
-                   or diastereomers(mol, max_isomers, seed))
-    else:
-        isomers = diastereomers(mol, max_isomers, seed)
+    isomers = search_isomers(mol, max_isomers, seed, adaptive)
     out["n_isomers"] = len(isomers)
     k = max(3 if adaptive else 2, math.ceil(n_conformers / len(isomers)))
     for iso in isomers:
