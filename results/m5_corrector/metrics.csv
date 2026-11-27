@@ -1,0 +1,7 @@
+split,method,n,rms_err_q50_pct,rms_err_q68_pct,rms_err_q90_pct,rms_err_q95_pct,robust_sd_per_constant_pct
+val,raw xTB,1000,1.514,1.896,3.356,5.184,1.033
+val,xTB - bias,1000,0.915,1.293,2.88,4.818,1.033
+val,GNN-corrected,1000,0.6203,0.982,2.553,4.411,0.7469
+test,raw xTB,1500,1.718,2.167,3.752,5.433,1.17
+test,xTB - bias,1500,0.9372,1.35,3.143,4.943,1.17
+test,GNN-corrected,1500,0.6416,1.012,2.687,4.292,0.7736

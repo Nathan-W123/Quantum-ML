@@ -151,6 +151,8 @@ def corrected_constants(phys: dict, corrector_path: Path) -> tuple[dict, float]:
     val_sd = metrics.query("split == 'val' and method == 'GNN-corrected'").robust_sd_per_constant_pct.item() / 100
     keys, zs, xs = [], [], []
     for smi, r in phys.items():
+        if any(a not in Z_OF_SYMBOL for a in r.get("symbols", [])):
+            continue  # element the corrector was not trained on (e.g. P): no corrected constants
         for k, xyz in enumerate(r.get("xtb_xyz", [])):
             keys.append((smi, k))
             zs.append([Z_OF_SYMBOL[a] for a in r["symbols"]])
