@@ -136,3 +136,5 @@ def test_adaptive_isomers_include_default_isomers():
     cage = Chem.MolFromSmiles("C1C2C1C1OC2C2OC12")
     embeddable = {enantiomer_pair_key(m) for m in diastereomers(cage, 100, try_embedding=True)}
     assert embeddable <= {enantiomer_pair_key(m) for m in search_isomers(cage, adaptive=True)}
+    # 16 diastereomers, none passing RDKit's embedding test: try all of them.
+    assert len(search_isomers(Chem.MolFromSmiles("CC1C2C3NC3C12C#N"), adaptive=True)) == 16

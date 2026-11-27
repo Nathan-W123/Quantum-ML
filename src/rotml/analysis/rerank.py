@@ -46,14 +46,16 @@ def search_isomers(mol: Chem.Mol, max_isomers: int = 8, seed: int = 42,
                    adaptive: bool = False) -> list[Chem.Mol]:
     """Stereoisomers to search for one candidate.
 
-    Default: up to max_isomers diastereomers. adaptive: the same ones plus
-    stereoisomers RDKit can embed, up to 16 in total, so the wider search
-    never drops an isomer the default search would have tried.
+    Default: up to max_isomers diastereomers. adaptive: the same ones, then
+    stereoisomers RDKit can embed, then any others, up to 16 in total, so the
+    wider search never drops an isomer the default search would have tried
+    (and tries all of them when there are at most 16).
     """
     isomers = {enantiomer_pair_key(m): m for m in diastereomers(mol, max_isomers, seed)}
     if adaptive:
         cap = max(16, len(isomers))
-        for iso in diastereomers(mol, cap, seed, try_embedding=True):
+        extra = diastereomers(mol, cap, seed, try_embedding=True) + diastereomers(mol, cap, seed)
+        for iso in extra:
             if len(isomers) >= cap:
                 break
             isomers.setdefault(enantiomer_pair_key(iso), iso)
