@@ -58,8 +58,9 @@ moment-of-inertia guidance come after the supervised baseline.
    The 9.65M-parameter run needs a GPU (`notebooks/m3_train_colab.ipynb`).
 4. **KREED baseline** - reproduce on QM9, retrain with fewer/no isotopologue coordinates. (Removing the formula requires changing the model: that is the research contribution.)
 5. **Full pipeline** - transformer proposals -> physics scoring -> calibrated ranking; test on experimental CDMS/JPL constants.
-   First prototype (`results/m5_rerank`): GFN2-xTB re-ranking of the top 30 candidates lifts top-1 recall
-   from 11% to 26.5% (formula given); exact DFT constants would give 47%, against a 50.5% ceiling.
+   Prototype (`results/m5_rerank`): re-ranking the top 30 candidates lifts top-1 recall from 11% to 26.5%
+   with GFN2-xTB and to 32% with a GNN geometry correction (`results/m5_corrector`: median constant error
+   0.94% -> 0.64% on held-out formulas); exact DFT constants would give 47%, against a 50.5% ceiling.
 
 Then: astro chemical space (radicals, ions, carbon chains), raw line lists,
 line grouping, retrospective rediscovery of detected interstellar molecules.
