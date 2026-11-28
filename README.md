@@ -17,7 +17,7 @@ pipeline design and the closest prior work.
 | 2. Error of cheap geometry methods (MMFF94, GFN2-xTB) vs DFT | done |
 | 3. Baseline inverse model (constants -> SELFIES transformer) | 3.8M-parameter CPU run done: with the formula, 43% top-10 recall on unseen formulas (random isomers: 4.4%). Without it, 2-3%; proposing formulas first lifts top-100 recall from 2% to 6%. Full 9.65M-parameter run needs a GPU |
 | 4. KREED baseline and ablations | planned |
-| 5. Full propose -> verify -> rank pipeline | prototype: re-ranking the top 30 candidates with GFN2-xTB plus a GNN geometry correction lifts top-1 recall from 11% to 32% (formula given) |
+| 5. Full propose -> verify -> rank pipeline | prototype: re-ranking the top 30 candidates with GFN2-xTB, a GNN geometry correction and a wider conformer search lifts top-1 recall from 11% to 35.5% (formula given) |
 
 ## Milestone 1: how much do rotational constants pin down a molecule?
 
@@ -286,7 +286,8 @@ Results are in `results/m5_rerank/`.
 | GFN2-xTB fit | 26.0% | 40.5% | 44.5% |
 | Model + GFN2-xTB | 26.5% | 43.0% | 45.5% |
 | GFN2-xTB + GNN correction fit | 32.5% | 42.0% | 44.5% |
-| **Model + GFN2-xTB + GNN correction** | **32.0%** | **43.5%** | **45.5%** |
+| Model + GFN2-xTB + GNN correction | 32.0% | 43.5% | 45.5% |
+| **Same, with the wider conformer search** | **35.5%** | **47.0%** | **48.5%** |
 | Exact DFT constants (oracle) | 47.0% | 50.0% | 50.5% |
 | Ceiling: right structure among the 30 candidates | 50.5% | 50.5% | 50.5% |
 
@@ -294,24 +295,26 @@ Results are in `results/m5_rerank/`.
 
 Findings:
 
-- **Physics re-ranking roughly triples top-1 recall**, from 11% to 32%
-  (bootstrap 95% CI of the gain 15 to 27.5 points). GFN2-xTB alone gives
-  26.5% (+15.5 points, CI 9.5 to 21), and the GNN correction (below) adds
-  5.5 points (CI 2 to 9.5: it wins 13 molecules and loses 2). For molecules
-  whose formula the model has never seen, the right structure is now ranked
-  first about a third of the time.
+- **Physics re-ranking more than triples top-1 recall**, from 11% to 35.5%
+  (bootstrap 95% CI of the gain 18 to 30.5 points). GFN2-xTB alone gives
+  26.5% (+15.5 points, CI 9.5 to 21), the GNN correction (below) adds 5.5
+  points (CI 2 to 9.5: it wins 13 molecules and loses 2), and the wider
+  conformer search (below) adds 3.5 more (CI 1 to 6.5: 8 wins, 1 loss). For
+  molecules whose formula the model has never seen, the right structure is
+  now ranked first more than a third of the time.
 - **It is cheap.** GFN2-xTB took about 1 CPU-minute per molecule for 30
   candidates, and the GNN correction adds well under a second. MMFF94 alone
   gives less than half the gain.
 - **What is still lost.** With exact DFT constants for the candidates, top-1
   recall would reach 47%, close to the 50.5% ceiling. The right structure was
-  proposed (101 molecules) but not ranked first by model + GFN2-xTB + GNN in
-  37 molecules:
-  - 20: a wrong candidate fit better (look-alikes, as in milestone 1). This
-    was 28 before the GNN correction.
-  - 12: the right structure's computed constants were off by more than 3%
-    (wrong conformer or method error).
-  - 5: no geometry could be made (strained cages ETKDG cannot embed).
+  proposed (101 molecules) but not ranked first by the full pipeline in 30
+  molecules:
+  - 22: a wrong candidate fit better (look-alikes, as in milestone 1). This
+    was 28 before the GNN correction. Telling these apart needs more
+    accurate constants (DFT on the top few) or more observables.
+  - 6: the right structure's computed constants were off by more than 3%
+    (12 before the wider search).
+  - 2: no geometry could be made (5 before the wider search).
 
 ### GNN geometry corrector
 
@@ -344,9 +347,35 @@ different conformer than DFT, which a local correction cannot undo. In the
 re-ranking, the scoring scale was fixed from the validation molecules
 (0.96% per constant), not tuned on test results.
 
-**Next steps:** a wider conformer search for the 17 conformer and embedding
-failures; DFT on the few top-ranked survivors; and a stronger proposal model
-(the GPU run) to raise the 50.5% ceiling.
+### Wider conformer search
+
+The default search embeds 10 ETKDG conformers spread over up to 8
+stereoisomers. That misses rotamers of flexible molecules and cannot embed
+some strained cages. The adaptive search (`--adaptive-search`,
+`candidate_constants(..., adaptive=True)` in `src/rotml/analysis/rerank.py`):
+
+- tries the same stereoisomers plus any RDKit can embed, then the rest, up to
+  16;
+- embeds 10 + 5 per rotatable bond conformers (up to 30), at least 3 per
+  stereoisomer, and as many again with a permissive ETKDG (random starting
+  coordinates, no torsion preferences) for other rotamers and strained rings.
+
+On the same 200 molecules and candidates, the right structure's best
+conformer error (bias-corrected GFN2-xTB, 90th percentile) drops from 11.5%
+to 3.0%. Candidates left without GFN2-xTB constants drop from 6.1% to 3.5%. Top-1 recall
+rises from 32.0% to 35.5%. It costs about 3.5 CPU-minutes per molecule for
+30 candidates, against about 1 for the default search.
+
+One trap on the way: RDKit's "can this stereoisomer be embedded" test makes
+a single embedding attempt. Used as a filter, it dropped the right
+stereoisomer of some cages, and the first version lost 2 molecules this way.
+It is now used only to add stereoisomers.
+
+**Next steps:** DFT on the few top-ranked survivors, to separate the
+remaining look-alikes. The oracle row shows the most it can add (35.5% →
+47%); it needs a GPU or a cluster (PySCF B3LYP optimisations take minutes to
+hours per candidate on this CPU). Also a stronger proposal model (the GPU
+run) to raise the 50.5% ceiling.
 
 Caveat: the oracle can only score candidates that are QM9 molecules (59% of
 them); the rest rank last. Since the right answer is always a QM9 molecule,
@@ -386,6 +415,8 @@ python scripts/10_build_corrector_data.py     # ~45 min on 4 cores: GFN2-xTB vs 
 python scripts/11_train_corrector.py --threads 2   # ~1.5 h
 python scripts/11b_plot_corrector.py
 python scripts/07_physics_rerank.py --run runs/m3_cpu_medium --out runs/m3_rerank --n 200 --top 30 --cache physics_geom.jsonl --keep-geometries --corrector runs/corrector/corrector.pt --summary-name summary_gnn.csv
+# wider conformer search: ~3 h on 4 cores in 110 min chunks (re-run to resume)
+python scripts/07_physics_rerank.py --run runs/m3_cpu_medium --out runs/m3_rerank --n 200 --top 30 --cache physics_adaptive.jsonl --keep-geometries --adaptive-search --corrector runs/corrector/corrector.pt --summary-name summary_adaptive.csv --time-budget-min 110
 python scripts/08_train_formula_model.py --out runs/formula --threads 1   # ~4 min
 python scripts/09_eval_formula_proposals.py --run runs/m3_cpu_medium --formula-model runs/formula/model.pt --n-eval 200 --top-formulas 20
 pytest
